@@ -34,7 +34,7 @@ WebExtension.runtime.onMessage.addListener(function(request, sender, sendRespons
           }
         });
 
-        DO.U.init();
+        DO.C.init();
 
         C.Loaded = true;
       }
@@ -50,7 +50,9 @@ WebExtension.runtime.onMessage.addListener(function(request, sender, sendRespons
       }
 
       if (iri && (C.WebID == null || C.WebID != iri)) {
-        auth.submitSignIn(iri);
+
+        //auth.submitSignIn(iri);
+        DO.C.User.WebIdDelegate = iri;
 
         C.WebID = iri;
       }

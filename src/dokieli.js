@@ -12,11 +12,14 @@ const uri = require('./uri')
 const graph = require('./graph')
 const inbox = require('./inbox')
 const util = require('./util')
+window.MediumEditor = require('medium-editor')
+window.MediumEditorTable = require('medium-editor-tables')
 const storage = require('./storage')
 global.auth = require('./auth')
 
 if(typeof DO === 'undefined'){
-global.SimpleRDF = (typeof ld !== 'undefined') ? ld.SimpleRDF : undefined;
+const ld = require('./simplerdf')
+global.SimpleRDF = ld.SimpleRDF
 var DO = {
   fetcher,
 
@@ -31,47 +34,31 @@ var DO = {
     getItemsList: function(url, options) {
       url = url || window.location.origin + window.location.pathname;
       options = options || {};
+      options['resourceItems'] = options.resourceItems || [];
+      options['headers'] = options.headers || {};
 
-      DO.C['CollectionItems'] = ('CollectionItems' in DO.C && DO.C.CollectionItems.length > 0) ? DO.C.CollectionItems : [];
+      DO.C['CollectionItems'] = DO.C['CollectionItems'] || {};
       DO.C['CollectionPages'] = ('CollectionPages' in DO.C && DO.C.CollectionPages.length > 0) ? DO.C.CollectionPages : [];
 
       var pIRI = uri.getProxyableIRI(url);
 
-      return fetcher.getResourceGraph(pIRI)
+      return fetcher.getResourceGraph(pIRI, options.headers, options)
         .then(
           function(i) {
             var s = i.child(url);
-
             //XXX: First item is actually the Collection
             DO.C.CollectionPages.push(url);
-
-            // s.ldpcontains.forEach(function(resource) {
-            //   var types = s.child(resource).rdftype;
-            //   if(types.indexOf(DO.C.Vocab['ldpContainer']["@id"]) < 0 && types.indexOf(DO.C.Vocab['asCollection']["@id"]) < 0) {
-            //     DO.C.CollectionItems.push(resource);
-            //   }
-            // });
-            // s.asitems.forEach(function(resource) {
-            //   var types = s.child(resource).rdftype;
-            //   if(types.indexOf(DO.C.Vocab['ldpContainer']["@id"]) < 0 && types.indexOf(DO.C.Vocab['asCollection']["@id"]) < 0) {
-            //     DO.C.CollectionItems.push(resource);
-            //   }
-            // });
-            // s.asorderedItems.forEach(function(resource) {
-            //   var types = s.child(resource).rdftype;
-            //   if(types.indexOf(DO.C.Vocab['ldpContainer']["@id"]) < 0 && types.indexOf(DO.C.Vocab['asCollection']["@id"]) < 0) {
-            //     DO.C.CollectionItems.push(resource);
-            //   }
-            // });
 
             var items = [s.asitems, s.asorderedItems, s.ldpcontains];
             Object.keys(items).forEach(function(i) {
               items[i].forEach(function(resource){
                 var types = s.child(resource).rdftype;
+                //Include only non-container/collection
                 if(types.indexOf(DO.C.Vocab['ldpContainer']["@id"]) < 0 &&
                    types.indexOf(DO.C.Vocab['asCollection']["@id"]) < 0 &&
                    types.indexOf(DO.C.Vocab['asOrderedCollection']["@id"]) < 0) {
-                  DO.C.CollectionItems.push(resource);
+                  DO.C.CollectionItems[resource] = s;
+                  options.resourceItems.push(resource);
                 }                
               });
             });
@@ -83,7 +70,7 @@ var DO = {
               return DO.U.getItemsList(s.asnext, options);
             }
             else {
-              return util.uniqueArray(DO.C.CollectionItems);
+              return util.uniqueArray(options.resourceItems);
             }
           },
           function(reason) {
@@ -163,20 +150,17 @@ var DO = {
         var i = rA.querySelector('.fa-bolt')
         rA.disabled = true;
 
-        if (i) {
-          i.classList.add('fa-circle-o-notch', 'fa-spin')
-          i.classList.remove('fa-bolt')
-        }
+        var icon = util.fragmentFromString('<svg class="fas fa-circle-notch fa-spin fa-2x fa-fw" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M288 39.056v16.659c0 10.804 7.281 20.159 17.686 23.066C383.204 100.434 440 171.518 440 256c0 101.689-82.295 184-184 184-101.689 0-184-82.295-184-184 0-84.47 56.786-155.564 134.312-177.219C216.719 75.874 224 66.517 224 55.712V39.064c0-15.709-14.834-27.153-30.046-23.234C86.603 43.482 7.394 141.206 8.003 257.332c.72 137.052 111.477 246.956 248.531 246.667C393.255 503.711 504 392.788 504 256c0-115.633-79.14-212.779-186.211-240.236C302.678 11.889 288 23.456 288 39.056z"/></svg>');
+        i.parentNode.replaceChild(icon, i);
       }
 
       var removeProgress = function(e) {
         var rA = e.target.closest('.resource-activities')
         var i = rA.querySelector('.fa-spin')
 
-        if (i) {
-          i.classList.add('fa-circle-o')
-          i.classList.remove('fa-circle-o-notch', 'fa-spin')
-        }
+        var icon = util.fragmentFromString('<svg class="fas fa-circle fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M256 8C119 8 8 119 8 256s111 248 248 248 248-111 248-248S393 8 256 8zm0 448c-110.5 0-200-89.5-200-200S145.5 56 256 56s200 89.5 200 200-89.5 200-200 200z"/></svg>');
+        i.parentNode.replaceChild(icon, i);
+
       }
 
       if (e) {
@@ -185,23 +169,41 @@ var DO = {
 
       var promises = []
 
-      if (DO.C.User.Outbox && DO.C.User.Outbox.length > 0) {
-        DO.U.showOutboxSources(DO.C.User.Outbox[0])
+      if (DO.C.User.Storage && DO.C.User.Storage.length > 0) {
+        if(DO.C.User.Outbox && DO.C.User.Outbox.length > 0) {
+          if(DO.C.User.Storage[0] == DO.C.User.Outbox[0]) {
+            DO.U.showActivitiesSources(DO.C.User.Outbox[0])
+          }
+          else {
+            DO.U.showActivitiesSources(DO.C.User.Storage[0])
+            DO.U.showActivitiesSources(DO.C.User.Outbox[0])
+          }
+        }
+        else {
+          DO.U.showActivitiesSources(DO.C.User.Storage[0])
+        }
+      }
+      else if (DO.C.User.Outbox && DO.C.User.Outbox.length > 0) {
+        DO.U.showActivitiesSources(DO.C.User.Outbox[0])
       }
 
       if (DO.C.User.Contacts && Object.keys(DO.C.User.Contacts).length > 0){
+        var sAS = function(iri) {
+          return DO.U.showActivitiesSources(iri)
+            .catch(() => {
+              return Promise.resolve()
+            })
+        }
+
         Object.keys(DO.C.User.Contacts).forEach(function(iri){
           var o = DO.C.User.Contacts[iri].Outbox
-
           if (o) {
-            var sOS = function(outbox) {
-              return DO.U.showOutboxSources(outbox)
-                .catch(() => {
-                  return Promise.resolve()
-                })
-            }
+            promises.push(sAS(o[0]))
+          }
 
-            promises.push(sOS(o[0]))
+          var s = DO.C.User.Contacts[iri].Storage
+          if (s) {
+            promises.push(sAS(s[0]))
           }
         })
 
@@ -211,7 +213,7 @@ var DO = {
           });
       }
       else {
-        return DO.U.updateContactsInfo(DO.C.User.IRI, { 'showOutboxSources': true })
+        return DO.U.updateContactsInfo(DO.C.User.IRI, { 'showActivitiesSources': true })
           .then(() => {
             removeProgress(e)
           })
@@ -221,8 +223,8 @@ var DO = {
       }
     },
 
-    showOutboxSources: function(url) {
-      return DO.U.getOutboxActivities(url).then(
+    showActivitiesSources: function(url) {
+      return DO.U.getActivities(url).then(
         function(items) {
           var promises = [];
 
@@ -246,37 +248,16 @@ var DO = {
       );
     },
 
-    getOutboxActivities: function(url) {
+    getActivities: function(url, options) {
       url = url || window.location.origin + window.location.pathname;
       var pIRI = uri.getProxyableIRI(url);
-      var headers = { 'Accept': 'application/ld+json; profile="https://www.w3.org/ns/activitystreams"'}
 
-      return fetcher.getResourceGraph(pIRI, headers)
-        .then(
-          function(i) {
-// console.log(i)
-            var s = i.child(url);
-            var items = Object.assign([], s.asitems._array);
-            items = Object.assign(items, s.asorderedItems._array);
-            items = util.uniqueArray(items);
-
-            if (items.length > 0) {
-              return items;
-            }
-            else {
-              var reason = {"message": "There are no activities."};
-              return Promise.reject(reason);
-            }
-          },
-          function(reason) {
-            console.log(reason);
-            return reason;
-          }
-        );
+      options = options || {};
+      return DO.U.getItemsList(pIRI, options);
     },
 
     showActivities: function(url) {
-      return graph.getGraph(url).then(
+      return fetcher.getResourceGraph(url).then(
         function(g) {
 // console.log(g);
           var subjects = [];
@@ -391,6 +372,7 @@ var DO = {
                         return iri;
                       },
                       function(reason){
+                        console.log(reason);
                         console.log(object + ': object is unreachable');
                       });
                   }
@@ -413,6 +395,10 @@ var DO = {
                       });
                   }
                 }
+              }
+              else if(resourceTypes.indexOf('http://www.w3.org/ns/oa#Annotation') > -1 && DO.U.getPathURL(s.oahasTarget) == currentPathURL) {
+
+                return DO.U.showAnnotation(i, s);
               }
               else {
                 // console.log(i + ' has unrecognised types: ' + resourceTypes);
@@ -596,7 +582,7 @@ var DO = {
               graph.links.push({"source": t.subject.nominalValue, "target": t.object.nominalValue, "value": t.predicate.nominalValue});
             });
 
-            delete graphNodes;
+            // delete graphNodes;
             return resolve(graph);
           }
         );
@@ -751,7 +737,7 @@ var DO = {
     importTextQuoteSelector: function(containerNode, selector, refId, docRefType, options) {
       var containerNodeTextContent = containerNode.textContent;
       //XXX: Seems better?
-      // var containerNodeTextContent = DO.U.fragmentFromString(doc.getDocument(containerNode)).textContent.trim();
+      // var containerNodeTextContent = util.fragmentFromString(doc.getDocument(containerNode)).textContent.trim();
 
 
 // console.log(containerNodeTextContent);
@@ -807,7 +793,7 @@ var DO = {
 // console.log(selectedParentNodeValue)
 
 // console.log(selectedParentNodeValue.substr(0, r.startOffset) + ref + selectedParentNodeValue.substr(r.startOffset + exact.length))
-        var selectionUpdated = DO.U.fragmentFromString(selectedParentNodeValue.substr(0, r.startOffset) + ref + selectedParentNodeValue.substr(r.startOffset + exact.length));
+        var selectionUpdated = util.fragmentFromString(selectedParentNodeValue.substr(0, r.startOffset) + ref + selectedParentNodeValue.substr(r.startOffset + exact.length));
 // console.log(selectionUpdated)
 
         //XXX: Review. This feels a bit dirty
@@ -826,6 +812,9 @@ var DO = {
     initUser: function() {
       storage.getStorageProfile().then(user => {
         if (user && 'object' in user) {
+          user.object.describes.Role = (DO.C.User.IRI && user.object.describes.Role) ? user.object.describes.Role : 'social';
+          user.object.describes.ContactsOutboxChecked = (DO.C.User.IRI && user.object.describes.ContactsOutboxChecked);
+
           DO.C['User'] = user.object.describes;
         }
       })
@@ -850,15 +839,12 @@ var DO = {
       }
 
       if (DO.C.EditorAvailable) {
-        if (DO.U.urlParam('author') == 'true' || DO.U.urlParam('social') == 'true' || DO.U.urlParam('review') == 'true') {
+        if (DO.U.urlParam('author') == 'true' || DO.U.urlParam('social') == 'true') {
           if (DO.U.urlParam('social') == 'true') {
             mode = 'social';
           }
           else if (DO.U.urlParam('author') == 'true') {
             mode = 'author';
-          }
-          else if (DO.U.urlParam('review') == 'true') {
-            mode = 'review';
           }
           var url = document.location.href;
           window.history.replaceState({}, null, url.substr(0, url.lastIndexOf('?')));
@@ -866,7 +852,7 @@ var DO = {
 
         if (mode !== 'author') {
           var content = DO.U.selectArticleNode(document);
-          content = DO.U.fragmentFromString(doc.domToString(content)).textContent.trim();
+          content = util.fragmentFromString(doc.domToString(content)).textContent.trim();
           if (content.length == 0) {
             mode = 'author';
           }
@@ -878,9 +864,6 @@ var DO = {
             break;
           case 'author':
             DO.U.Editor.enableEditor('author');
-            break;
-          case 'review':
-            DO.U.Editor.enableEditor('review');
             break;
         }
       }
@@ -903,12 +886,12 @@ var DO = {
 
       var annotationRights = document.querySelectorAll('[about="#annotation-rights"][typeof="schema:ChooseAction"], [href="#annotation-rights"][typeof="schema:ChooseAction"], [resource="#annotation-rights"][typeof="schema:ChooseAction"]');
       for (var i = 0; i < annotationRights.length; i++){
-        annotationRights[i].parentNode.replaceChild(DO.U.fragmentFromString('<select>' + DO.U.getLicenseOptionsHTML() + '</select>'), annotationRights[i]);
+        annotationRights[i].parentNode.replaceChild(util.fragmentFromString('<select>' + DO.U.getLicenseOptionsHTML() + '</select>'), annotationRights[i]);
       }
     },
 
     showDocumentInfo: function() {
-      document.documentElement.appendChild(DO.U.fragmentFromString('<menu id="document-menu" class="do"><button class="show" title="Open Menu"><i class="fa fa-bars"></i></button><header></header><div></div><footer><dl><dt>About</dt><dd id="about-dokieli"><img alt="" height="16" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAMAAAD04JH5AAAAn1BMVEUAAAAAjwAAkAAAjwAAjwAAjwAAjwAAjwAAkAAAdwAAjwAAjQAAcAAAjwAAjwAAiQAAjwAAjAAAjwAAjwAAjwAAjwAAkAAAjwAAjwAAjwAAjQAAjQAAhQAAhQAAkAAAkAAAkAAAjgAAjwAAiQAAhAAAkAAAjwAAjwAAkAAAjwAAjgAAjgAAjQAAjwAAjQAAjwAAkAAAjwAAjQAAiwAAkABp3EJyAAAANHRSTlMA+fH89enaabMF4iADxJ4SiSa+uXztyoNvQDcsDgvl3pRiXBcH1M+ppJlWUUpFMq6OdjwbMc1+ZgAABAhJREFUeNrt29nSmkAQBeAGZBMUxH3f993/vP+zJZVKVZKCRhibyc3/XVt6SimYPjPSt28Vmt5W/fu2T/9B9HIf7Tp+0RsgDC6DY6OLvzxJj8341DnsakgZUNUmo2XsORYYS6rOeugukhnyragiq56JIs5UEQ/FXKgidRTzompEKOhG1biioDFV44mCAqrGAQWtqRptA8VMqCpR6zpo9iy84VO1opWHPBZVb9QAzyQN/D1YNungJ+DMSYsbOFvSIwGjR3p0wGiQHkMw2qRHC4w76RGBcSA9NmAcSY8QjAdpYiFbTJoYyNYnTWrI1iFNusj2JE1sZBuQJtyE5pImc3Y21cRhZ1NNtsh2Ik127HCsSY8djjVpINuVhPnjVefobee2adXqu2S/6FyivABDEjQ9Lxo1pDlNd5wg24ikRK5ngKGhHhg1DSgZk4RrD6pa9LlRAnUBfWp6xCe+6EOvOT6yrmrigZaCZHPAp6b0gaiBFKvRd0/D1rr1OrvxDqiyoZmmPt9onib0t/VybyEXqdu0Cw16rUNVAfZFlzdjr5KOaoAUK6JsrgWGQapuBlIS4gy70gEmTrk1fuAgU40UxWXv6wvZAC2Dqfx0BfBK1z1H0aJ0WH7Ub4oG8JDlpBCgK1l5tSjHQSoAf0HVfMqxF+yqpzVk2ZGuAGdk8ijPHZlmpOCg0vh5cgE2JtN3qQSoU3lXpbKlLRegrzTpt+U2TNpKY2YiFiA0kS1Q6QccweZ/oinASm2B3RML0AGDNAU4qq3udmIXYVttD3YrFsBR24N1xG5EJpTeaiYWwILS5WRKBfChFsCSehpOwKi/yS0V4AsMWym3TWUFgMqIsRYL8AVOSDlaYgEitbZnDKll+UatchyJBSC1c3lDuQA2VHYAL3KneHpgLCjHSS7AHYyEciwh1g88wDB94rlyAVxwhsR7ygW4gRMTry8XwDdUDkXFgjVdD5wRsRaCAWJwPGI1Baval8Ie3Hqn8AjjhHbZr2DzrInumDTBGlCG8xy8QPY3MNLX4TiRP1q+BWs2pn9ECwu5+qTABc+80h++28UbTkjlTW3wrM6Ufrtu8d5J9Svg1Vch/RTcUYQdUHm+g1z1x2gSGyjGGVN5F7xjoTCjE0ndC3jJMzfCftmiciZ1lNGe3vCGufOWVMLIQHHehi3X1O8JJxR236SalUzninbu937BlwfV/I3k4KdGk2xm+MHuLa8Z0i9TC280qLRrF+8cw9RSjrOg8oIG8j2YgULsbGPomsgR0x9nsOzkOLh+kZr1owZGbfC2JJl78fIV0Wei/gxZDl85XWVtt++cxhuSEQ6bdfzLjlvM86PbaD4vQUjSglV8385My7CdXtO9+ZSyrLcf7nBN376V8gMpRztyq6RXYQAAAABJRU5ErkJggg==" width="16" /><a href="https://dokie.li/" target="_blank">dokieli</a> is an <i class="fa fa-github"></i> <a href="https://github.com/linkeddata/dokieli" target="_blank">open source</a> project. There is <i class="fa fa-flask"></i> <a href="https://dokie.li/docs" target="_blank">documentation</a> and public <i class="fa fa-comments-o"></i> <a href="https://gitter.im/linkeddata/dokieli" target="_blank">chat</a> available. Made with fun.</dd></dl></footer></menu>'));
+      document.documentElement.appendChild(util.fragmentFromString('<menu id="document-menu" class="do"><button class="show" title="Open menu"><svg class="fas fa-bars" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M16 132h416c8.837 0 16-7.163 16-16V76c0-8.837-7.163-16-16-16H16C7.163 60 0 67.163 0 76v40c0 8.837 7.163 16 16 16zm0 160h416c8.837 0 16-7.163 16-16v-40c0-8.837-7.163-16-16-16H16c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16zm0 160h416c8.837 0 16-7.163 16-16v-40c0-8.837-7.163-16-16-16H16c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16z"/></svg></button><header></header><div></div><footer><dl><dt>About</dt><dd id="about-dokieli"><img alt="" height="16" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAMAAAD04JH5AAAAn1BMVEUAAAAAjwAAkAAAjwAAjwAAjwAAjwAAjwAAkAAAdwAAjwAAjQAAcAAAjwAAjwAAiQAAjwAAjAAAjwAAjwAAjwAAjwAAkAAAjwAAjwAAjwAAjQAAjQAAhQAAhQAAkAAAkAAAkAAAjgAAjwAAiQAAhAAAkAAAjwAAjwAAkAAAjwAAjgAAjgAAjQAAjwAAjQAAjwAAkAAAjwAAjQAAiwAAkABp3EJyAAAANHRSTlMA+fH89enaabMF4iADxJ4SiSa+uXztyoNvQDcsDgvl3pRiXBcH1M+ppJlWUUpFMq6OdjwbMc1+ZgAABAhJREFUeNrt29nSmkAQBeAGZBMUxH3f993/vP+zJZVKVZKCRhibyc3/XVt6SimYPjPSt28Vmt5W/fu2T/9B9HIf7Tp+0RsgDC6DY6OLvzxJj8341DnsakgZUNUmo2XsORYYS6rOeugukhnyragiq56JIs5UEQ/FXKgidRTzompEKOhG1biioDFV44mCAqrGAQWtqRptA8VMqCpR6zpo9iy84VO1opWHPBZVb9QAzyQN/D1YNungJ+DMSYsbOFvSIwGjR3p0wGiQHkMw2qRHC4w76RGBcSA9NmAcSY8QjAdpYiFbTJoYyNYnTWrI1iFNusj2JE1sZBuQJtyE5pImc3Y21cRhZ1NNtsh2Ik127HCsSY8djjVpINuVhPnjVefobee2adXqu2S/6FyivABDEjQ9Lxo1pDlNd5wg24ikRK5ngKGhHhg1DSgZk4RrD6pa9LlRAnUBfWp6xCe+6EOvOT6yrmrigZaCZHPAp6b0gaiBFKvRd0/D1rr1OrvxDqiyoZmmPt9onib0t/VybyEXqdu0Cw16rUNVAfZFlzdjr5KOaoAUK6JsrgWGQapuBlIS4gy70gEmTrk1fuAgU40UxWXv6wvZAC2Dqfx0BfBK1z1H0aJ0WH7Ub4oG8JDlpBCgK1l5tSjHQSoAf0HVfMqxF+yqpzVk2ZGuAGdk8ijPHZlmpOCg0vh5cgE2JtN3qQSoU3lXpbKlLRegrzTpt+U2TNpKY2YiFiA0kS1Q6QccweZ/oinASm2B3RML0AGDNAU4qq3udmIXYVttD3YrFsBR24N1xG5EJpTeaiYWwILS5WRKBfChFsCSehpOwKi/yS0V4AsMWym3TWUFgMqIsRYL8AVOSDlaYgEitbZnDKll+UatchyJBSC1c3lDuQA2VHYAL3KneHpgLCjHSS7AHYyEciwh1g88wDB94rlyAVxwhsR7ygW4gRMTry8XwDdUDkXFgjVdD5wRsRaCAWJwPGI1Baval8Ie3Hqn8AjjhHbZr2DzrInumDTBGlCG8xy8QPY3MNLX4TiRP1q+BWs2pn9ECwu5+qTABc+80h++28UbTkjlTW3wrM6Ufrtu8d5J9Svg1Vch/RTcUYQdUHm+g1z1x2gSGyjGGVN5F7xjoTCjE0ndC3jJMzfCftmiciZ1lNGe3vCGufOWVMLIQHHehi3X1O8JJxR236SalUzninbu937BlwfV/I3k4KdGk2xm+MHuLa8Z0i9TC280qLRrF+8cw9RSjrOg8oIG8j2YgULsbGPomsgR0x9nsOzkOLh+kZr1owZGbfC2JJl78fIV0Wei/gxZDl85XWVtt++cxhuSEQ6bdfzLjlvM86PbaD4vQUjSglV8385My7CdXtO9+ZSyrLcf7nBN376V8gMpRztyq6RXYQAAAABJRU5ErkJggg==" width="16" /><a href="https://dokie.li/" target="_blank">dokieli</a> is an <svg class="fab fa-osi" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 495.8 512"><path d="M0 259.2C2.3 123.4 97.4 26.8 213.8 11.1c138.8-18.6 255.6 75.8 278 201.1 21.3 118.8-44 230-151.6 274-9.3 3.8-14.4 1.7-18-7.7-17.8-46.3-35.6-92.7-53.4-139-3.1-8.1-1-13.2 7-16.8 24.2-11 39.3-29.4 43.3-55.8 6.4-42.4-24.5-78.7-64.5-82.2-39-3.4-71.8 23.7-77.5 59.7-5.2 33 11.1 63.7 41.9 77.7 9.6 4.4 11.5 8.6 7.8 18.4-17.9 46.6-35.8 93.2-53.7 139.9-2.6 6.9-8.3 9.3-15.5 6.5-52.6-20.3-101.4-61-130.8-119C1.9 318.7 1.6 280.2 0 259.2zm20.9-1.9c.4 6.6.6 14.3 1.3 22.1 6.3 71.9 49.6 143.5 131 183.1 3.2 1.5 4.4.8 5.6-2.3 14.9-39.1 29.9-78.2 45-117.3 1.3-3.3.6-4.8-2.4-6.7-31.6-19.9-47.3-48.5-45.6-86 1-21.6 9.3-40.5 23.8-56.3 30-32.7 77-39.8 115.5-17.6 31.9 18.4 49.5 53.8 45.2 90.4-3.6 30.6-19.3 53.9-45.7 69.8-2.7 1.6-3.5 2.9-2.3 6 15.2 39.2 30.2 78.4 45.2 117.7 1.2 3.1 2.4 3.8 5.6 2.3 35.5-16.6 65.2-40.3 88.1-72 34.8-48.2 49.1-101.9 42.3-161C459.8 112 354.1 14.7 218 31.5 111.9 44.5 22.7 134 20.9 257.3z"/></svg> <a href="https://github.com/linkeddata/dokieli" target="_blank">open source</a> project. There is <svg class="fas fa-flask" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M437.2 403.5L320 215V64h8c13.3 0 24-10.7 24-24V24c0-13.3-10.7-24-24-24H120c-13.3 0-24 10.7-24 24v16c0 13.3 10.7 24 24 24h8v151L10.8 403.5C-18.5 450.6 15.3 512 70.9 512h306.2c55.7 0 89.4-61.5 60.1-108.5zM137.9 320l48.2-77.6c3.7-5.2 5.8-11.6 5.8-18.4V64h64v160c0 6.9 2.2 13.2 5.8 18.4l48.2 77.6h-172z"/></svg> <a href="https://dokie.li/docs" target="_blank">documentation</a> and public <svg class="fas fa-comments" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><path d="M416 192c0-88.4-93.1-160-208-160S0 103.6 0 192c0 34.3 14.1 65.9 38 92-13.4 30.2-35.5 54.2-35.8 54.5-2.2 2.3-2.8 5.7-1.5 8.7S4.8 352 8 352c36.6 0 66.9-12.3 88.7-25 32.2 15.7 70.3 25 111.3 25 114.9 0 208-71.6 208-160zm122 220c23.9-26 38-57.7 38-92 0-66.9-53.5-124.2-129.3-148.1.9 6.6 1.3 13.3 1.3 20.1 0 105.9-107.7 192-240 192-10.8 0-21.3-.8-31.7-1.9C207.8 439.6 281.8 480 368 480c41 0 79.1-9.2 111.3-25 21.8 12.7 52.1 25 88.7 25 3.2 0 6.1-1.9 7.3-4.8 1.3-2.9.7-6.3-1.5-8.7-.3-.3-22.4-24.2-35.8-54.5z"/></svg> <a href="https://gitter.im/linkeddata/dokieli" target="_blank">chat</a> available. Made with fun.</dd></dl></footer></menu>'));
       document.querySelector('#document-menu').addEventListener('click', function(e) {
         var button = e.target.closest('button');
         if(button){
@@ -940,14 +923,12 @@ var DO = {
           dMenuButton.classList.remove('show');
           dMenuButton.classList.add('hide');
           dMenuButton.setAttribute('title', 'Hide Menu');
-          dMenuButton.innerHTML = '<i class="fa fa-minus"></i>';
+          dMenuButton.innerHTML = '<svg class="fas fa-minus" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M416 208H32c-17.67 0-32 14.33-32 32v32c0 17.67 14.33 32 32 32h384c17.67 0 32-14.33 32-32v-32c0-17.67-14.33-32-32-32z"/></svg>';
           dMenu.classList.add('on');
           body.classList.add('on-document-menu');
 
           auth.showUserSigninSignout(dHead);
           DO.U.showDocumentDo(dInfo);
-          DO.U.showEmbedData(dInfo);
-          storage.showStorage(dInfo);
           DO.U.showViews(dInfo);
           DO.U.showDocumentMetadata(dInfo);
           if(!body.classList.contains('on-slideshow')) {
@@ -985,7 +966,7 @@ var DO = {
       dMenuButton.classList.remove('hide');
       dMenuButton.classList.add('show');
       dMenuButton.setAttribute('title', 'Open Menu');
-      dMenuButton.innerHTML = '<i class="fa fa-bars"></i>';
+      dMenuButton.innerHTML = '<svg class="fas fa-bars" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M16 132h416c8.837 0 16-7.163 16-16V76c0-8.837-7.163-16-16-16H16C7.163 60 0 67.163 0 76v40c0 8.837 7.163 16 16 16zm0 160h416c8.837 0 16-7.163 16-16v-40c0-8.837-7.163-16-16-16H16c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16zm0 160h416c8.837 0 16-7.163 16-16v-40c0-8.837-7.163-16-16-16H16c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16z"/></svg>';
 
       var removeElementsList = ['document-items', 'embed-data-entry', 'create-new-document', 'open-document', 'source-view', 'save-as-document', 'user-identity-input', 'resource-browser', 'share-resource', 'reply-to-resource', 'memento-document', 'graph-view'];
       removeElementsList.forEach(function(id) {
@@ -1060,7 +1041,7 @@ var DO = {
 
       var stylesheets = document.querySelectorAll('head link[rel~="stylesheet"][title]:not([href$="do.css"])');
 
-      var s = '<section id="document-views" class="do"><h2>Views</h2><i class="fa fa-magic"></i><ul>';
+      var s = '<section id="document-views" class="do"><h2>Views</h2><svg class="fas fa-magic" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M224 96l16-32 32-16-32-16-16-32-16 32-32 16 32 16 16 32zM80 160l26.66-53.33L160 80l-53.34-26.67L80 0 53.34 53.33 0 80l53.34 26.67L80 160zm352 128l-26.66 53.33L352 368l53.34 26.67L432 448l26.66-53.33L512 368l-53.34-26.67L432 288zm70.62-193.77L417.77 9.38C411.53 3.12 403.34 0 395.15 0c-8.19 0-16.38 3.12-22.63 9.38L9.38 372.52c-12.5 12.5-12.5 32.76 0 45.25l84.85 84.85c6.25 6.25 14.44 9.37 22.62 9.37 8.19 0 16.38-3.12 22.63-9.37l363.14-363.15c12.5-12.48 12.5-32.75 0-45.24zM359.45 203.46l-50.91-50.91 86.6-86.6 50.91 50.91-86.6 86.6z"/></svg><ul>';
       if (DO.C.GraphViewerAvailable) {
         s += '<li><button class="resource-visualise" title="Change to graph view">Graph</button></li>';
       }
@@ -1074,7 +1055,7 @@ var DO = {
             s += '<li><button title="Change to ‘' + view + '’ view">' + view + '</button></li>';
           }
           else {
-            s += '<li><button disabled="disabled">' + view + '</button></li>';
+            s += '<li><button disabled="disabled" title="Current style">' + view + '</button></li>';
           }
         }
       }
@@ -1097,7 +1078,7 @@ var DO = {
               e.target.disabled = true;
             }
 
-            document.documentElement.appendChild(DO.U.fragmentFromString('<aside id="graph-view" class="do on">' + DO.C.Button.Close + '<h2>Graph view</h2></aside>'));
+            document.documentElement.appendChild(util.fragmentFromString('<aside id="graph-view" class="do on">' + DO.C.Button.Close + '<h2>Graph view</h2></aside>'));
 
             var graphView = document.getElementById('graph-view');
             graphView.addEventListener('click', function(e) {
@@ -1174,7 +1155,7 @@ var DO = {
           dMenuButton.classList.remove('show');
           dMenuButton.classList.add('hide');
           dMenuButton.setAttribute('title', 'Open Menu');
-          dMenuButton.innerHTML = '<i class="fa fa-minus"></i>';
+          dMenuButton.innerHTML = '<svg class="fas fa-minus" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M416 208H32c-17.67 0-32 14.33-32 32v32c0 17.67 14.33 32 32 32h384c17.67 0 32-14.33 32-32v-32c0-17.67-14.33-32-32-32z"/></svg>';
           dMenu.classList.remove('on');
           body.classList.remove('on-document-menu');
 
@@ -1207,12 +1188,10 @@ var DO = {
       }
     },
 
-    showEmbedData: function(node) {
+    showEmbedData: function(e) {
       if(document.querySelector('#embed-data-in-html')) { return; }
 
-      node.insertAdjacentHTML('beforeend', '<section id="embed-data-in-html" class="do"><h2>Data</h2><ul><li><button class="embed-data-meta" title="Embed structured data (Turtle, JSON-LD, TriG)"><i class="fa fa-table fa-2x"></i>Embed Data</button></li></ul></section>');
-
-      var eventEmbedData = function(e) {
+      // var eventEmbedData = function(e) {
         e.target.setAttribute('disabled', 'disabled');
         var scriptCurrent = document.querySelectorAll('head script[id^="meta-"]');
 
@@ -1256,12 +1235,12 @@ var DO = {
         var embedMenu = '<aside id="embed-data-entry" class="do on tabs">' + DO.C.Button.Close + '\n\
         <h2>Embed Data</h2>\n\
         <nav><ul><li class="selected"><a href="#embed-data-turtle">Turtle</a></li><li><a href="#embed-data-json-ld">JSON-LD</a></li><li><a href="#embed-data-trig">TriG</a></li></ul></nav>\n\
-        <div id="embed-data-turtle" class="selected"><textarea placeholder="Enter data in Turtle" name="meta-turtle" cols="80" rows="24">' + ((scriptCurrentData['meta-turtle']) ? scriptCurrentData['meta-turtle'].content : '') + '</textarea><button class="save">Save</button></div>\n\
-        <div id="embed-data-json-ld"><textarea placeholder="Enter data in JSON-LD" name="meta-json-ld" cols="80" rows="24">' + ((scriptCurrentData['meta-json-ld']) ? scriptCurrentData['meta-json-ld'].content : '') + '</textarea><button class="save">Save</button></div>\n\
-        <div id="embed-data-trig"><textarea placeholder="Enter data in TriG" name="meta-trig" cols="80" rows="24">' + ((scriptCurrentData['meta-trig']) ? scriptCurrentData['meta-trig'].content : '') + '</textarea><button class="save">Save</button></div>\n\
+        <div id="embed-data-turtle" class="selected"><textarea placeholder="Enter data in Turtle" name="meta-turtle" cols="80" rows="24">' + ((scriptCurrentData['meta-turtle']) ? scriptCurrentData['meta-turtle'].content : '') + '</textarea><button class="save" title="Embed data into document">Save</button></div>\n\
+        <div id="embed-data-json-ld"><textarea placeholder="Enter data in JSON-LD" name="meta-json-ld" cols="80" rows="24">' + ((scriptCurrentData['meta-json-ld']) ? scriptCurrentData['meta-json-ld'].content : '') + '</textarea><button class="save" title="Embed data into document">Save</button></div>\n\
+        <div id="embed-data-trig"><textarea placeholder="Enter data in TriG" name="meta-trig" cols="80" rows="24">' + ((scriptCurrentData['meta-trig']) ? scriptCurrentData['meta-trig'].content : '') + '</textarea><button class="save" title="Embed data into document">Save</button></div>\n\
         </aside>';
 
-        document.documentElement.appendChild(DO.U.fragmentFromString(embedMenu));
+        document.documentElement.appendChild(util.fragmentFromString(embedMenu));
         document.querySelector('#embed-data-turtle textarea').focus();
         var a = document.querySelectorAll('#embed-data-entry nav a');
         for(var i = 0; i < a.length; i++) {
@@ -1282,7 +1261,7 @@ var DO = {
         }
 
         document.querySelector('#embed-data-entry button.close').addEventListener('click', function(e) {
-          document.querySelector('#embed-data-in-html .embed-data-meta').removeAttribute('disabled');
+          document.querySelector('button.embed-data-meta').removeAttribute('disabled');
         });
 
         var buttonSave = document.querySelectorAll('#embed-data-entry button.save');
@@ -1311,14 +1290,14 @@ var DO = {
 
             var ede = document.getElementById('embed-data-entry');
             ede.parentNode.removeChild(ede);
-            document.querySelector('#embed-data-in-html .embed-data-meta').removeAttribute('disabled');
+            document.querySelector('.embed-data-meta').removeAttribute('disabled');
           });
         };
-      };
+      // };
 
-      var edih = document.querySelector('#embed-data-in-html button');
-      edih.removeEventListener('click', eventEmbedData);
-      edih.addEventListener('click', eventEmbedData);
+      // var edih = document.querySelector('button.embed-data-meta');
+      // edih.removeEventListener('click', eventEmbedData);
+      // edih.addEventListener('click', eventEmbedData);
     },
 
     htmlEntities: function(s) {
@@ -1379,6 +1358,9 @@ var DO = {
           return authors + contributors;
         }).then(
         function(people){
+              // <tr><th>Lines</th><td>' + count.lines + '</td></tr>\n\
+              // <tr><th>A4 Pages</th><td>' + count.pages.A4 + '</td></tr>\n\
+              // <tr><th>US Letter</th><td>' + count.pages.USLetter + '</td></tr>\n\
           var s = '<section id="document-metadata" class="do"><table>\n\
             <caption>Document Metadata</caption>\n\
             <tbody>\n\
@@ -1386,9 +1368,6 @@ var DO = {
               <tr><th>Reading time</th><td>' + count.readingTime + ' minutes</td></tr>\n\
               <tr><th>Characters</th><td>' + count.chars + '</td></tr>\n\
               <tr><th>Words</th><td>' + count.words + '</td></tr>\n\
-              <tr><th>Lines</th><td>' + count.lines + '</td></tr>\n\
-              <tr><th>A4 Pages</th><td>' + count.pages.A4 + '</td></tr>\n\
-              <tr><th>US Letter</th><td>' + count.pages.USLetter + '</td></tr>\n\
               <tr><th>Bytes</th><td>' + count.bytes + '</td></tr>\n\
             </tbody>\n\
           </table></section>';
@@ -1398,7 +1377,7 @@ var DO = {
     },
 
     contentCount: function contentCount (c) {
-      var content = DO.U.fragmentFromString(doc.domToString(c)).textContent.trim();
+      var content = util.fragmentFromString(doc.domToString(c)).textContent.trim();
       var contentCount = { readingTime:1, words:0, chars:0, lines:0, pages:{A4:1, USLetter:1}, bytes:0 };
       if (content.length > 0) {
         var lineHeight = c.ownerDocument.defaultView.getComputedStyle(c, null)["line-height"];
@@ -1436,7 +1415,7 @@ var DO = {
       if (!node) {
         node = document.getElementById('document-items');
         if (!node) {
-          document.documentElement.appendChild(DO.U.fragmentFromString('<aside id="document-items" class="do on">' + DO.C.Button.Close + '</aside>'));
+          document.documentElement.appendChild(util.fragmentFromString('<aside id="document-items" class="do on">' + DO.C.Button.Close + '</aside>'));
           node = document.getElementById('document-items');
         }
       }
@@ -1501,7 +1480,7 @@ var DO = {
       }
 
       var toc = '<section id="table-of-contents-i" class="do"' + sortable + '><h2>Table of Contents</h2><ol class="toc' + sortable + '">';
-      toc += DO.U.getListOfSections(sections, DO.C.SortableList);
+      toc += DO.U.getListOfSections(sections, {'sortable': DO.C.SortableList});
       toc += '</ol></section>';
 
       node.insertAdjacentHTML('beforeend', toc);
@@ -1511,21 +1490,31 @@ var DO = {
     sortToC: function() {
     },
 
-    getListOfSections: function(sections, sortable) {
+    getListOfSections: function(sections, options) {
+      options = options || {};
       var s = '', attributeClass = '';
-      if (sortable == true) { attributeClass = ' class="sortable"'; }
+      if (options.sortable == true) { attributeClass = ' class="sortable"'; }
 
       for (var i = 0; i < sections.length; i++) {
         var section = sections[i];
         if(section.id) {
           var heading = section.querySelector('h1, h2, h3, h4, h5, h6, header h1, header h2, header h3, header h4, header h5, header h6') || { 'textContent': section.id };
+          var currentHash = '';
+          var dataId = '';
+
+          if (!options.raw) {
+            currentHash = (document.location.hash == '#' + section.id) ? ' class="selected"' : '';
+            dataId = ' data-id="' + section.id +'"';
+            attributeClass = '';
+          }
+
           if (heading) {
-            s += '<li data-id="' + section.id +'"><a href="#' + section.id + '">' + heading.textContent + '</a>';
+            s += '<li' + currentHash + dataId + '><a href="#' + section.id + '">' + heading.textContent + '</a>';
             var subsections = section.parentNode.querySelectorAll('[id="' + section.id + '"] > div > section[rel*="hasPart"]:not([class~="slide"]), [id="' + section.id + '"] > section[rel*="hasPart"]:not([class~="slide"])');
 
             if (subsections.length > 0) {
               s += '<ol'+ attributeClass +'>';
-              s += DO.U.getListOfSections(subsections, sortable);
+              s += DO.U.getListOfSections(subsections, options);
               s += '</ol>';
             }
             s += '</li>';
@@ -1580,7 +1569,7 @@ var DO = {
           s += '<div><ol class="toc">';
 
           if (element == 'content') {
-            s += DO.U.getListOfSections(document.querySelectorAll('h1 ~ div > section:not([class~="slide"])'), false);
+            s += DO.U.getListOfSections(document.querySelectorAll('h1 ~ div > section:not([class~="slide"])'), {'raw': true});
           }
           else {
             if (element == 'abbr') {
@@ -1885,7 +1874,7 @@ var DO = {
 
         versionurl = (versionurl) ? '<dt>Version</dt><dd><a href="' + versionurl + '" target="_blank">' + versiondate + '</a></dd>' : '';
 
-        i.insertAdjacentHTML('afterend', '<span class="do robustlinks"><button title="Robust Links">🔗<span></span></button><dl>' + originalurl + versionurl + nearlinkdateurl + '</dl></span>');
+        i.insertAdjacentHTML('afterend', '<span class="do robustlinks"><button title="Show Robust Links">🔗<span></span></button><dl>' + originalurl + versionurl + nearlinkdateurl + '</dl></span>');
       });
 
       document.querySelectorAll('.do.robustlinks').forEach(function(i){
@@ -1981,7 +1970,7 @@ var DO = {
         else { button.disabled = true; }
 
         var archiveNode = button.parentNode;
-        archiveNode.insertAdjacentHTML('beforeend', ' <span class="progress"><i class="fa fa-circle-o-notch fa-spin fa-fw"></i> Archiving in progress.</span>');
+        archiveNode.insertAdjacentHTML('beforeend', ' <span class="progress"><svg class="fas fa-circle-notch fa-spin fa-fw" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M288 39.056v16.659c0 10.804 7.281 20.159 17.686 23.066C383.204 100.434 440 171.518 440 256c0 101.689-82.295 184-184 184-101.689 0-184-82.295-184-184 0-84.47 56.786-155.564 134.312-177.219C216.719 75.874 224 66.517 224 55.712V39.064c0-15.709-14.834-27.153-30.046-23.234C86.603 43.482 7.394 141.206 8.003 257.332c.72 137.052 111.477 246.956 248.531 246.667C393.255 503.711 504 392.788 504 256c0-115.633-79.14-212.779-186.211-240.236C302.678 11.889 288 23.456 288 39.056z"/></svg> Archiving in progress.</span>');
       }
 
       options.noCredentials = true
@@ -2000,11 +1989,11 @@ var DO = {
                 let location = 'https://web.archive.org' + response.wayback_id
 
                 progress
-                  .innerHTML = '<i class="fa fa-archive fa-fw"></i> Archived at <a target="_blank" href="' +
+                  .innerHTML = '<svg class="fas fa-archive" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M32 448c0 17.7 14.3 32 32 32h384c17.7 0 32-14.3 32-32V160H32v288zm160-212c0-6.6 5.4-12 12-12h104c6.6 0 12 5.4 12 12v8c0 6.6-5.4 12-12 12H204c-6.6 0-12-5.4-12-12v-8zM480 32H32C14.3 32 0 46.3 0 64v48c0 8.8 7.2 16 16 16h480c8.8 0 16-7.2 16-16V64c0-17.7-14.3-32-32-32z"/></svg> Archived at <a target="_blank" href="' +
                   location + '">' + location + '</a>'
               } else {
                 progress
-                  .innerHTML = '<i class="fa fa-times-circle fa-fw "></i> Archive unavailable. Please try later.'
+                  .innerHTML = '<svg class="fas fa-times-circle fa-fw" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M256 8C119 8 8 119 8 256s111 248 248 248 248-111 248-248S393 8 256 8zm121.6 313.1c4.7 4.7 4.7 12.3 0 17L338 377.6c-4.7 4.7-12.3 4.7-17 0L256 312l-65.1 65.6c-4.7 4.7-12.3 4.7-17 0L134.4 338c-4.7-4.7-4.7-12.3 0-17l65.6-65-65.6-65.1c-4.7-4.7-4.7-12.3 0-17l39.6-39.6c4.7-4.7 12.3-4.7 17 0l65 65.7 65.1-65.6c4.7-4.7 12.3-4.7 17 0l39.6 39.6c4.7 4.7 4.7 12.3 0 17L312 256l65.6 65.1z"/></svg> Archive unavailable. Please try later.'
               }
 
               break
@@ -2013,7 +2002,7 @@ var DO = {
 
         .catch(() => {
           progress
-            .innerHTML = '<i class="fa fa-times-circle fa-fw "></i> Archive unavailable. Please try later.'
+            .innerHTML = '<svg class="fas fa-times-circle fa-fw" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M256 8C119 8 8 119 8 256s111 248 248 248 248-111 248-248S393 8 256 8zm121.6 313.1c4.7 4.7 4.7 12.3 0 17L338 377.6c-4.7 4.7-12.3 4.7-17 0L256 312l-65.1 65.6c-4.7 4.7-12.3 4.7-17 0L134.4 338c-4.7-4.7-4.7-12.3 0-17l65.6-65-65.6-65.1c-4.7-4.7-4.7-12.3 0-17l39.6-39.6c4.7-4.7 12.3-4.7 17 0l65 65.7 65.1-65.6c4.7-4.7 12.3-4.7 17 0l39.6 39.6c4.7 4.7 4.7 12.3 0 17L312 256l65.6 65.1z"/></svg> Archive unavailable. Please try later.'
         })
     },
 
@@ -2033,12 +2022,12 @@ var DO = {
 
       var li = [];
       li.push('<li><button class="create-version"' + buttonDisabled +
-        ' title="Version this article"><i class="fa fa-code-fork fa-2x"></i>Version</button></li>');
+        ' title="Version this article"><svg class="fas fa-code-branch fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><path d="M384 144c0-44.2-35.8-80-80-80s-80 35.8-80 80c0 36.4 24.3 67.1 57.5 76.8-.6 16.1-4.2 28.5-11 36.9-15.4 19.2-49.3 22.4-85.2 25.7-28.2 2.6-57.4 5.4-81.3 16.9v-144c32.5-10.2 56-40.5 56-76.3 0-44.2-35.8-80-80-80S0 35.8 0 80c0 35.8 23.5 66.1 56 76.3v199.3C23.5 365.9 0 396.2 0 432c0 44.2 35.8 80 80 80s80-35.8 80-80c0-34-21.2-63.1-51.2-74.6 3.1-5.2 7.8-9.8 14.9-13.4 16.2-8.2 40.4-10.4 66.1-12.8 42.2-3.9 90-8.4 118.2-43.4 14-17.4 21.1-39.8 21.6-67.9 31.6-10.8 54.4-40.7 54.4-75.9zM80 64c8.8 0 16 7.2 16 16s-7.2 16-16 16-16-7.2-16-16 7.2-16 16-16zm0 384c-8.8 0-16-7.2-16-16s7.2-16 16-16 16 7.2 16 16-7.2 16-16 16zm224-320c8.8 0 16 7.2 16 16s-7.2 16-16 16-16-7.2-16-16 7.2-16 16-16z"/></svg>Version</button></li>');
       li.push('<li><button class="create-immutable"' + buttonDisabled +
-        ' title="Make this article immutable and version it"><i class="fa fa-snowflake-o fa-2x"></i>Immutable</button></li>');
+        ' title="Make this article immutable and version it"><svg class="far fa-snowflake fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M440.1 355.2l-39.2-23 34.1-9.3c8.4-2.3 13.4-11.1 11.1-19.6l-4.1-15.5c-2.2-8.5-10.9-13.6-19.3-11.3L343 298.2 271.2 256l71.9-42.2 79.7 21.7c8.4 2.3 17-2.8 19.3-11.3l4.1-15.5c2.2-8.5-2.7-17.3-11.1-19.6l-34.1-9.3 39.2-23c7.5-4.4 10.1-14.2 5.8-21.9l-7.9-13.9c-4.3-7.7-14-10.3-21.5-5.9l-39.2 23 9.1-34.7c2.2-8.5-2.7-17.3-11.1-19.6l-15.2-4.1c-8.4-2.3-17 2.8-19.3 11.3l-21.3 81-71.9 42.2v-84.5L306 70.4c6.1-6.2 6.1-16.4 0-22.6l-11.1-11.3c-6.1-6.2-16.1-6.2-22.2 0l-24.9 25.4V16c0-8.8-7-16-15.7-16h-15.7c-8.7 0-15.7 7.2-15.7 16v46.1l-24.9-25.4c-6.1-6.2-16.1-6.2-22.2 0L142.1 48c-6.1 6.2-6.1 16.4 0 22.6l58.3 59.3v84.5l-71.9-42.2-21.3-81c-2.2-8.5-10.9-13.6-19.3-11.3L72.7 84c-8.4 2.3-13.4 11.1-11.1 19.6l9.1 34.7-39.2-23c-7.5-4.4-17.1-1.8-21.5 5.9l-7.9 13.9c-4.3 7.7-1.8 17.4 5.8 21.9l39.2 23-34.1 9.1c-8.4 2.3-13.4 11.1-11.1 19.6L6 224.2c2.2 8.5 10.9 13.6 19.3 11.3l79.7-21.7 71.9 42.2-71.9 42.2-79.7-21.7c-8.4-2.3-17 2.8-19.3 11.3l-4.1 15.5c-2.2 8.5 2.7 17.3 11.1 19.6l34.1 9.3-39.2 23c-7.5 4.4-10.1 14.2-5.8 21.9L10 391c4.3 7.7 14 10.3 21.5 5.9l39.2-23-9.1 34.7c-2.2 8.5 2.7 17.3 11.1 19.6l15.2 4.1c8.4 2.3 17-2.8 19.3-11.3l21.3-81 71.9-42.2v84.5l-58.3 59.3c-6.1 6.2-6.1 16.4 0 22.6l11.1 11.3c6.1 6.2 16.1 6.2 22.2 0l24.9-25.4V496c0 8.8 7 16 15.7 16h15.7c8.7 0 15.7-7.2 15.7-16v-46.1l24.9 25.4c6.1 6.2 16.1 6.2 22.2 0l11.1-11.3c6.1-6.2 6.1-16.4 0-22.6l-58.3-59.3v-84.5l71.9 42.2 21.3 81c2.2 8.5 10.9 13.6 19.3 11.3L375 428c8.4-2.3 13.4-11.1 11.1-19.6l-9.1-34.7 39.2 23c7.5 4.4 17.1 1.8 21.5-5.9l7.9-13.9c4.6-7.5 2.1-17.3-5.5-21.7z"/></svg>Immutable</button></li>');
       li.push('<li><button class="snapshot-internet-archive"' + buttonDisabled +
-        ' title="Capture with Internet Archive"><i class="fa fa-archive fa-2x"></i>Internet Archive</button></li>');
-      li.push('<li><button class="export-as-html" title="Export and save to file"><i class="fa fa-external-link fa-2x"></i>Export</button></li>');
+        ' title="Capture with Internet Archive"><svg class="fas fa-archive fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M32 448c0 17.7 14.3 32 32 32h384c17.7 0 32-14.3 32-32V160H32v288zm160-212c0-6.6 5.4-12 12-12h104c6.6 0 12 5.4 12 12v8c0 6.6-5.4 12-12 12H204c-6.6 0-12-5.4-12-12v-8zM480 32H32C14.3 32 0 46.3 0 64v48c0 8.8 7.2 16 16 16h480c8.8 0 16-7.2 16-16V64c0-17.7-14.3-32-32-32z"/></svg>Internet Archive</button></li>');
+      li.push('<li><button class="export-as-html" title="Export and save to file"><svg class="fas fa-external-link-alt fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><path d="M576 24v127.984c0 21.461-25.96 31.98-40.971 16.971l-35.707-35.709-243.523 243.523c-9.373 9.373-24.568 9.373-33.941 0l-22.627-22.627c-9.373-9.373-9.373-24.569 0-33.941L442.756 76.676l-35.703-35.705C391.982 25.9 402.656 0 424.024 0H552c13.255 0 24 10.745 24 24zM407.029 270.794l-16 16A23.999 23.999 0 0 0 384 303.765V448H64V128h264a24.003 24.003 0 0 0 16.97-7.029l16-16C376.089 89.851 365.381 64 344 64H48C21.49 64 0 85.49 0 112v352c0 26.51 21.49 48 48 48h352c26.51 0 48-21.49 48-48V287.764c0-21.382-25.852-32.09-40.971-16.97z"/></svg>Export</button></li>');
 
       e.target.closest('button').insertAdjacentHTML('afterend', '<ul id="memento-items" class="on">' + li.join('') + '</ul>');
 
@@ -2048,7 +2037,7 @@ var DO = {
 
       mementoItems.addEventListener('click', function(e) {
         if (e.target.closest('button.resource-save') ||
-            e.target.closest('button.create-version') || 
+            e.target.closest('button.create-version') ||
             e.target.closest('button.create-immutable')) {
           DO.U.resourceSave(e);
         }
@@ -2077,7 +2066,7 @@ var DO = {
           if (!node) {
             node = document.getElementById(elementId);
             if(!node) {
-              document.documentElement.appendChild(DO.U.fragmentFromString('<aside id="' + elementId + '" class="do on"><h2>Memento</h2>' + DO.C.Button.Close + '</aside>'));
+              document.documentElement.appendChild(util.fragmentFromString('<aside id="' + elementId + '" class="do on"><h2>Memento</h2>' + DO.C.Button.Close + '</aside>'));
               node = document.getElementById(elementId);
             }
           }
@@ -2119,37 +2108,33 @@ var DO = {
       var buttonDisabled = '';
 
       var s = '<section id="document-do" class="do"><h2>Do</h2><ul>';
-      s += '<li><button class="resource-share" title="Share resource"><i class="fa fa-bullhorn fa-2x"></i>Share</button></li>';
-      s += '<li><button class="resource-reply" title="Reply"><i class="fa fa-reply fa-2x"></i>Reply</button></li>';
-
-      if (DO.C.EditorAvailable) {
-        var reviewArticle = (DO.C.EditorEnabled && DO.C.User.Role == 'review')
-          ? DO.C.Editor.DisableReviewButton
-          : DO.C.Editor.EnableReviewButton;
-        s += '<li>' + reviewArticle + '</li>';
-      }
+      s += '<li><button class="resource-share" title="Share resource"><svg class="fas fa-bullhorn fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><path d="M576 240c0-23.63-12.95-44.04-32-55.12V32.01C544 23.26 537.02 0 512 0c-7.12 0-14.19 2.38-19.98 7.02l-85.03 68.03C364.28 109.19 310.66 128 256 128H64c-35.35 0-64 28.65-64 64v96c0 35.35 28.65 64 64 64h33.7c-1.39 10.48-2.18 21.14-2.18 32 0 39.77 9.26 77.35 25.56 110.94 5.19 10.69 16.52 17.06 28.4 17.06h74.28c26.05 0 41.69-29.84 25.9-50.56-16.4-21.52-26.15-48.36-26.15-77.44 0-11.11 1.62-21.79 4.41-32H256c54.66 0 108.28 18.81 150.98 52.95l85.03 68.03a32.023 32.023 0 0 0 19.98 7.02c24.92 0 32-22.78 32-32V295.13C563.05 284.04 576 263.63 576 240zm-96 141.42l-33.05-26.44C392.95 311.78 325.12 288 256 288v-96c69.12 0 136.95-23.78 190.95-66.98L480 98.58v282.84z"/></svg>Share</button></li>';
+      s += '<li><button class="resource-reply" title="Reply"><svg class="fas fa-reply fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M8.309 189.836L184.313 37.851C199.719 24.546 224 35.347 224 56.015v80.053c160.629 1.839 288 34.032 288 186.258 0 61.441-39.581 122.309-83.333 154.132-13.653 9.931-33.111-2.533-28.077-18.631 45.344-145.012-21.507-183.51-176.59-185.742V360c0 20.7-24.3 31.453-39.687 18.164l-176.004-152c-11.071-9.562-11.086-26.753 0-36.328z"/></svg>Reply</button></li>';
 
       buttonDisabled = (DO.C.User.IRI) ? '' : ' disabled="disabled"';
 
-      var activitiesIcon = 'fa-bolt';
+      var activitiesIcon = '<svg class="fas fa-bolt fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><path d="M296 160H180.6l42.6-129.8C227.2 15 215.7 0 200 0H56C44 0 33.8 8.9 32.2 20.8l-32 240C-1.7 275.2 9.5 288 24 288h118.7L96.6 482.5c-3.6 15.2 8 29.5 23.3 29.5 8.4 0 16.4-4.4 20.8-12l176-304c9.3-15.9-2.2-36-20.7-36z"/></svg>';
 
       if (DO.C.User['ContactsOutboxChecked']) {
-        activitiesIcon = 'fa-circle-o';
+        activitiesIcon = '<svg class="fas fa-circle fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M256 8C119 8 8 119 8 256s111 248 248 248 248-111 248-248S393 8 256 8zm0 448c-110.5 0-200-89.5-200-200S145.5 56 256 56s200 89.5 200 200-89.5 200-200 200z"/></svg>';
         buttonDisabled = ' disabled="disabled"';
       }
 
       s += '<li><button class="resource-activities"' + buttonDisabled +
-        ' title="Show activities"><i class="fa ' + activitiesIcon + ' fa-2x"></i></i>Activities</button></li>';
-      s += '<li><button class="resource-new" title="Create new article"><i class="fa fa-lightbulb-o fa-2x"></i></i>New</button></li>';
-      s += '<li><button class="resource-open" title="Open article"><i class="fa fa-coffee fa-2x"></i></i>Open</button></li>';
+        ' title="Show activities">' + activitiesIcon + 'Activities</button></li>';
+
+      s += '<li><button class="resource-new" title="Create new article"><svg class="far fa-lightbulb fa-2x" viewBox="0 0 352 512"><path d="M176 80c-52.94 0-96 43.06-96 96 0 8.84 7.16 16 16 16s16-7.16 16-16c0-35.3 28.72-64 64-64 8.84 0 16-7.16 16-16s-7.16-16-16-16zM96.06 459.17c0 3.15.93 6.22 2.68 8.84l24.51 36.84c2.97 4.46 7.97 7.14 13.32 7.14h78.85c5.36 0 10.36-2.68 13.32-7.14l24.51-36.84c1.74-2.62 2.67-5.7 2.68-8.84l.05-43.18H96.02l.04 43.18zM176 0C73.72 0 0 82.97 0 176c0 44.37 16.45 84.85 43.56 115.78 16.64 18.99 42.74 58.8 52.42 92.16v.06h48v-.12c-.01-4.77-.72-9.51-2.15-14.07-5.59-17.81-22.82-64.77-62.17-109.67-20.54-23.43-31.52-53.15-31.61-84.14-.2-73.64 59.67-128 127.95-128 70.58 0 128 57.42 128 128 0 30.97-11.24 60.85-31.65 84.14-39.11 44.61-56.42 91.47-62.1 109.46a47.507 47.507 0 0 0-2.22 14.3v.1h48v-.05c9.68-33.37 35.78-73.18 52.42-92.16C335.55 260.85 352 220.37 352 176 352 78.8 273.2 0 176 0z"/></svg>New</button></li>';
+
+      s += '<li><button class="resource-open" title="Open article"><svg class="fas fa-coffee fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><path d="M192 384h192c53 0 96-43 96-96h32c70.6 0 128-57.4 128-128S582.6 32 512 32H120c-13.3 0-24 10.7-24 24v232c0 53 43 96 96 96zM512 96c35.3 0 64 28.7 64 64s-28.7 64-64 64h-32V96h32zm47.7 384H48.3c-47.6 0-61-64-36-64h583.3c25 0 11.8 64-35.9 64z"/></svg>Open</button></li>';
 
       buttonDisabled = (document.location.protocol === 'file:') ? ' disabled="disabled"' : '';
 
       s += '<li><button class="resource-save"' + buttonDisabled +
-        ' title="Save article"><i class="fa fa-life-ring fa-2x"></i>Save</button></li>';
+        ' title="Save article"><svg class="fas fa-life-ring fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M256 504c136.967 0 248-111.033 248-248S392.967 8 256 8 8 119.033 8 256s111.033 248 248 248zm-103.398-76.72l53.411-53.411c31.806 13.506 68.128 13.522 99.974 0l53.411 53.411c-63.217 38.319-143.579 38.319-206.796 0zM336 256c0 44.112-35.888 80-80 80s-80-35.888-80-80 35.888-80 80-80 80 35.888 80 80zm91.28 103.398l-53.411-53.411c13.505-31.806 13.522-68.128 0-99.974l53.411-53.411c38.319 63.217 38.319 143.579 0 206.796zM359.397 84.72l-53.411 53.411c-31.806-13.505-68.128-13.522-99.973 0L152.602 84.72c63.217-38.319 143.579-38.319 206.795 0zM84.72 152.602l53.411 53.411c-13.506 31.806-13.522 68.128 0 99.974L84.72 359.398c-38.319-63.217-38.319-143.579 0-206.796z"/></svg>Save</button></li>';
 
-      s += '<li><button class="resource-save-as" title="Save as article"><i class="fa fa-paper-plane-o fa-2x"></i>Save As</button></li>';
-      s += '<li><button class="resource-memento" title="Memento article"><i class="fa fa-clock-o fa-2x"></i>Memento</button></li>';
+      s += '<li><button class="resource-save-as" title="Save as article"><svg class="far fa-paper-plane fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M440 6.5L24 246.4c-34.4 19.9-31.1 70.8 5.7 85.9L144 379.6V464c0 46.4 59.2 65.5 86.6 28.6l43.8-59.1 111.9 46.2c5.9 2.4 12.1 3.6 18.3 3.6 8.2 0 16.3-2.1 23.6-6.2 12.8-7.2 21.6-20 23.9-34.5l59.4-387.2c6.1-40.1-36.9-68.8-71.5-48.9zM192 464v-64.6l36.6 15.1L192 464zm212.6-28.7l-153.8-63.5L391 169.5c10.7-15.5-9.5-33.5-23.7-21.2L155.8 332.6 48 288 464 48l-59.4 387.3z"/></svg>Save As</button></li>';
+
+      s += '<li><button class="resource-memento" title="Memento article"><svg class="far fa-paper-clock fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M256 8C119 8 8 119 8 256s111 248 248 248 248-111 248-248S393 8 256 8zm0 448c-110.5 0-200-89.5-200-200S145.5 56 256 56s200 89.5 200 200-89.5 200-200 200zm61.8-104.4l-84.9-61.7c-3.1-2.3-4.9-5.9-4.9-9.7V116c0-6.6 5.4-12 12-12h32c6.6 0 12 5.4 12 12v141.7l66.8 48.6c5.4 3.9 6.5 11.4 2.6 16.8L334.6 349c-3.9 5.3-11.4 6.5-16.8 2.6z"/></svg>Memento</button></li>';
 
       if (DO.C.EditorAvailable) {
         var editFile = (DO.C.EditorEnabled && DO.C.User.Role == 'author')
@@ -2159,7 +2144,10 @@ var DO = {
       }
 
       s += '<li><button class="resource-source"' + buttonDisabled +
-        ' title="Edit article source code"><i class="fa fa-code fa-2x"></i>Source</button></li>';
+        ' title="Edit article source code"><svg class="fas fa-code fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><path d="M278.9 511.5l-61-17.7c-6.4-1.8-10-8.5-8.2-14.9L346.2 8.7c1.8-6.4 8.5-10 14.9-8.2l61 17.7c6.4 1.8 10 8.5 8.2 14.9L293.8 503.3c-1.9 6.4-8.5 10.1-14.9 8.2zm-114-112.2l43.5-46.4c4.6-4.9 4.3-12.7-.8-17.2L117 256l90.6-79.7c5.1-4.5 5.5-12.3.8-17.2l-43.5-46.4c-4.5-4.8-12.1-5.1-17-.5L3.8 247.2c-5.1 4.7-5.1 12.8 0 17.5l144.1 135.1c4.9 4.6 12.5 4.4 17-.5zm327.2.6l144.1-135.1c5.1-4.7 5.1-12.8 0-17.5L492.1 112.1c-4.8-4.5-12.4-4.3-17 .5L431.6 159c-4.6 4.9-4.3 12.7.8 17.2L523 256l-90.6 79.7c-5.1 4.5-5.5 12.3-.8 17.2l43.5 46.4c4.5 4.9 12.1 5.1 17 .6z"/></svg>Source</button></li>';
+
+      s += '<li><button class="embed-data-meta" title="Embed structured data (Turtle, JSON-LD, TriG)"><svg class="fas fa-table fa-2x" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M464 32H48C21.49 32 0 53.49 0 80v352c0 26.51 21.49 48 48 48h416c26.51 0 48-21.49 48-48V80c0-26.51-21.49-48-48-48zM224 416H64v-96h160v96zm0-160H64v-96h160v96zm224 160H288v-96h160v96zm0-160H288v-96h160v96z"/></svg>Embed Data</button></li>';
+
       s += '</ul></section>';
 
       node.insertAdjacentHTML('beforeend', s);
@@ -2176,20 +2164,13 @@ var DO = {
         }
 
         if (DO.C.EditorAvailable) {
-          if (e.target.closest('button.editor-disable') ||
-            e.target.closest('button.review-disable')) {
+          if (e.target.closest('button.editor-disable')) {
             e.target.parentNode.innerHTML = DO.C.Editor.EnableEditorButton;
             DO.U.Editor.enableEditor('social', e);
           }
-          else {
-            if (e.target.closest('button.editor-enable')) {
-              e.target.parentNode.innerHTML = DO.C.Editor.DisableEditorButton;
-              DO.U.Editor.enableEditor('author', e);
-            }
-            else if (e.target.closest('button.review-enable')) {
-              e.target.parentNode.innerHTML = DO.C.Editor.DisableEditorButton;
-              DO.U.Editor.enableEditor('review', e);
-            }
+          else if (e.target.closest('button.editor-enable')) {
+            e.target.parentNode.innerHTML = DO.C.Editor.DisableEditorButton;
+            DO.U.Editor.enableEditor('author', e);
           }
         }
 
@@ -2207,6 +2188,10 @@ var DO = {
 
         if (e.target.closest('.resource-source')) {
           DO.U.viewSource(e);
+        }
+
+        if (e.target.closest('.embed-data-meta')) {
+          DO.U.showEmbedData(e);
         }
 
         if (e.target.closest('.resource-save')){
@@ -2244,7 +2229,7 @@ var DO = {
     createImmutableResource: function(url, data, options) {
       if(!url) return;
 
-      var uuid = DO.U.generateUUID();
+      var uuid = util.generateUUID();
       var containerIRI = url.substr(0, url.lastIndexOf('/') + 1);
       var immutableURL = containerIRI + uuid;
 
@@ -2345,7 +2330,7 @@ var DO = {
 
       DO.U.setDate(document, { 'id': 'document-created', 'property': 'schema:dateCreated', 'title': 'Created' } );
 
-      var uuid = DO.U.generateUUID();
+      var uuid = util.generateUUID();
       var containerIRI = url.substr(0, url.lastIndexOf('/') + 1);
       var mutableURL = containerIRI + uuid;
 
@@ -2436,7 +2421,7 @@ var DO = {
 
       e.target.closest('button').disabled = true
 
-      document.documentElement.appendChild(DO.U.fragmentFromString('<aside id="reply-to-resource" class="do on">' + DO.C.Button.Close + '<h2>Reply to this</h2><div id="reply-to-resource-input"><p>Reply to <code>' +
+      document.documentElement.appendChild(util.fragmentFromString('<aside id="reply-to-resource" class="do on">' + DO.C.Button.Close + '<h2>Reply to this</h2><div id="reply-to-resource-input"><p>Reply to <code>' +
         iri +'</code></p><ul><li><p><label for="reply-to-resource-note">Quick reply (plain text note)</label></p><p><textarea id="reply-to-resource-note" rows="10" cols="40" name="reply-to-resource-note" placeholder="Great article!"></textarea></p></li><li><label for="reply-to-resource-license">License</label> <select id="reply-to-resource-license" name="reply-to-resource-license">' +
         DO.U.getLicenseOptionsHTML() + '</select></li></ul></div>'))
 
@@ -2458,9 +2443,7 @@ var DO = {
       var bli = document.getElementById(id + '-input')
       bli.focus()
       bli.placeholder = 'https://example.org/path/to/article'
-      replyToResource.insertAdjacentHTML('beforeend', '<button class="reply">Send now</button>')
-
-      // replyToResource.insertAdjacentHTML('beforeend', 'or <button class="reply-new"><i class="fa fa-paper-plane-o"></i> Write reply in new window</button>');
+      replyToResource.insertAdjacentHTML('beforeend', '<button class="reply" title="Send your reply">Send</button>')
 
       replyToResource.addEventListener('click', e => {
         if (e.target.closest('button.close')) {
@@ -2526,35 +2509,41 @@ var DO = {
 
         var note = DO.U.createNoteDataHTML(noteData)
 
-        var data = DO.U.createHTML('', note)
+        var data = doc.createHTML('', note)
 
         fetcher.putResource(noteIRI, data)
 
           .catch(error => {
-            console.error('Could not save reply:', error)
+            console.log('Could not save reply:')
+            console.error(error)
 
-            let errorMessage
+            let message
 
             switch (error.status) {
               case 0:
               case 405:
-                errorMessage = 'this location is not writable'
+                message = 'this location is not writable.'
                 break
               case 401:
+                message = 'you are not authorized.'
+                if(!DO.C.User.IRI){
+                  message += ' Try signing in.';
+                }
+                break;
               case 403:
-                errorMessage = 'you do not have permission to write here'
+                message = 'you do not have permission to write here.'
                 break
               case 406:
-                errorMessage = 'enter a name for your resource'
+                message = 'enter a name for your resource.'
                 break
               default:
                 // some other reason
-                errorMessage = error.message
+                message = error.message
                 break
             }
 
             // re-throw, to break out of the promise chain
-            throw new Error('Cannot save your reply:', errorMessage)
+            throw new Error('Cannot save your reply: ', message)
           })
 
           .then(response => {
@@ -2624,7 +2613,7 @@ var DO = {
 
     showActionMessage: function(node, message) {
       var message = '<aside id="document-action-message" class="do on"><p>' + message + '</p></aside>';
-      node.appendChild(DO.U.fragmentFromString(message));
+      node.appendChild(util.fragmentFromString(message));
       window.setTimeout(function () {
         var dam = document.getElementById('document-action-message');
         dam.parentNode.removeChild(dam);
@@ -2648,7 +2637,7 @@ var DO = {
         shareResourceLinkedResearch = '<li><input id="share-resource-linked-research" type="checkbox" value="https://linkedresearch.org/cloud" /><label for="share-resource-linked-research">Notify <a href="https://linkedresearch.org/cloud">Linked Open Research Cloud</a></label></li>';
       }
 
-      document.documentElement.appendChild(DO.U.fragmentFromString('<aside id="share-resource" class="do on">' + DO.C.Button.Close + '<h2>Share resource</h2><div id="share-resource-input"><p>Send a notification about <code>' + iri +'</code></p><ul><li id="share-resource-address-book"></li>' + shareResourceLinkedResearch + '<li><label for="share-resource-to">To</label> <textarea id="share-resource-to" rows="2" cols="40" name="share-resource-to" placeholder="WebID or article IRI (one per line)"></textarea></li><li><label for="share-resource-note">Note</label> <textarea id="share-resource-note" rows="2" cols="40" name="share-resource-note" placeholder="Check this out!"></textarea></li></ul></div><button class="share">Share</button></aside>'));
+      document.documentElement.appendChild(util.fragmentFromString('<aside id="share-resource" class="do on">' + DO.C.Button.Close + '<h2>Share resource</h2><div id="share-resource-input"><p>Send a notification about <code>' + iri +'</code></p><ul><li id="share-resource-address-book"></li>' + shareResourceLinkedResearch + '<li><label for="share-resource-to">To</label> <textarea id="share-resource-to" rows="2" cols="40" name="share-resource-to" placeholder="WebID or article IRI (one per line)"></textarea></li><li><label for="share-resource-note">Note</label> <textarea id="share-resource-note" rows="2" cols="40" name="share-resource-note" placeholder="Check this out!"></textarea></li></ul></div><button class="share" title="Share resource">Share</button></aside>'));
 
       var li = document.getElementById('share-resource-address-book');
 
@@ -2656,7 +2645,7 @@ var DO = {
         DO.U.selectContacts(li, DO.C.User.IRI);
       }
       else {
-        li.insertAdjacentHTML('beforeend', '<button class="add"' + addContactsButtonDisable + '><i class="fa fa-address-book"></i> Add from contacts</button>' + noContactsText);
+        li.insertAdjacentHTML('beforeend', '<button class="add"' + addContactsButtonDisable + ' title="Add and select contacts from your profile"><svg class="far fa-address-book" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M436 160c6.6 0 12-5.4 12-12v-40c0-6.6-5.4-12-12-12h-20V48c0-26.5-21.5-48-48-48H48C21.5 0 0 21.5 0 48v416c0 26.5 21.5 48 48 48h320c26.5 0 48-21.5 48-48v-48h20c6.6 0 12-5.4 12-12v-40c0-6.6-5.4-12-12-12h-20v-64h20c6.6 0 12-5.4 12-12v-40c0-6.6-5.4-12-12-12h-20v-64h20zm-68 304H48V48h320v416zM208 256c35.3 0 64-28.7 64-64s-28.7-64-64-64-64 28.7-64 64 28.7 64 64 64zm-89.6 128h179.2c12.4 0 22.4-8.6 22.4-19.2v-19.2c0-31.8-30.1-57.6-67.2-57.6-10.8 0-18.7 8-44.8 8-26.9 0-33.4-8-44.8-8-37.1 0-67.2 25.8-67.2 57.6v19.2c0 10.6 10 19.2 22.4 19.2z"/></svg> Add from contacts</button>' + noContactsText);
       }
 
       var shareResource = document.getElementById('share-resource');
@@ -2672,7 +2661,7 @@ var DO = {
           e.preventDefault();
           e.stopPropagation();
           var li = e.target.closest('li');
-          li.insertAdjacentHTML('beforeend', '<i class="fa fa-circle-o-notch fa-spin fa-fw"></i>');
+          li.insertAdjacentHTML('beforeend', '<svg class="fas fa-circle-notch fa-spin fa-fw" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M288 39.056v16.659c0 10.804 7.281 20.159 17.686 23.066C383.204 100.434 440 171.518 440 256c0 101.689-82.295 184-184 184-101.689 0-184-82.295-184-184 0-84.47 56.786-155.564 134.312-177.219C216.719 75.874 224 66.517 224 55.712V39.064c0-15.709-14.834-27.153-30.046-23.234C86.603 43.482 7.394 141.206 8.003 257.332c.72 137.052 111.477 246.956 248.531 246.667C393.255 503.711 504 392.788 504 256c0-115.633-79.14-212.779-186.211-240.236C302.678 11.889 288 23.456 288 39.056z"/></svg>');
           DO.U.selectContacts(li, DO.C.User.IRI);
         }
 
@@ -2737,23 +2726,39 @@ var DO = {
           if(contacts.length > 0) {
             var promises = [];
 
+            //Get Contacts' profile
             var gC = function(url) {
               return fetcher.getResourceGraph(url).then(i => {
                 // console.log(i);
                 var s = i.child(url);
 
+                //Keep a local copy
                 DO.C.User.Contacts[url] = {};
                 DO.C.User.Contacts[url]['Graph'] = s;
 
-                var uCO = function(url, s) {
-                  return DO.U.updateContactsOutbox(url, s)
-                    .then(() => {
-                      if ('showOutboxSources' in options) {
-                        return DO.U.showOutboxSources(DO.C.User.Contacts[url].Outbox[0])
+                var uCA = function(url, s) {
+                  var outbox = DO.C.User.Contacts[url]['Outbox'] = auth.getAgentOutbox(s);
+                  var storage = DO.C.User.Contacts[url]['Storage'] = auth.getAgentStorage(s);
+                  if ('showActivitiesSources' in options) {
+                    if (storage && storage.length > 0) {
+                      if(outbox && outbox.length > 0) {
+                        if(storage[0] == outbox[0]) {
+                          DO.U.showActivitiesSources(outbox[0])
+                        }
+                        else {
+                          DO.U.showActivitiesSources(storage[0])
+                          DO.U.showActivitiesSources(outbox[0])
+                        }
                       }
-                      return Promise.resolve();
-                    })
-                    .catch(() => {})
+                      else {
+                        DO.U.showActivitiesSources(storage[0])
+                      }
+                    }
+                    else if (outbox && outbox.length > 0) {
+                      DO.U.showActivitiesSources(outbox[0])
+                    }
+                  }
+                  return Promise.resolve();
                 }
 
                 var uCI = function(url, s) {
@@ -2768,12 +2773,12 @@ var DO = {
                 }
 
                 //XXX: Holy crap this is fugly.
-                if ('showOutboxSources' in options) {
+                if ('showActivitiesSources' in options) {
                   uCI(url, s);
-                  return uCO(url, s)
+                  return uCA(url, s)
                 }
                 else if ('addShareResourceContactInput' in options) {
-                  uCO(url, s)
+                  uCA(url, s)
                   return uCI(url, s)
                 }
 
@@ -2793,7 +2798,7 @@ var DO = {
           }
           else {
             if ('addShareResourceContactInput' in options) {
-              options.addShareResourceContactInput.innerHTML = 'No contacts with <i class="fa fa-inbox"></i> inbox found in your profile, but you can enter contacts individually:';
+              options.addShareResourceContactInput.innerHTML = 'No contacts with <svg class="fas fa-inbox" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><path d="M567.938 243.908L462.25 85.374A48.003 48.003 0 0 0 422.311 64H153.689a48 48 0 0 0-39.938 21.374L8.062 243.908A47.994 47.994 0 0 0 0 270.533V400c0 26.51 21.49 48 48 48h480c26.51 0 48-21.49 48-48V270.533a47.994 47.994 0 0 0-8.062-26.625zM162.252 128h251.497l85.333 128H376l-32 64H232l-32-64H76.918l85.334-128z"/></svg> inbox found in your profile, but you can enter contacts individually:';
             }
 
             return Promise.resolve()
@@ -2824,7 +2829,7 @@ console.log(reason);
         if (aI) {
           return Promise.resolve(aI);
         }
-        else {
+        else if (iri.indexOf('#') < 0) {
           return inbox.getEndpointFromHead(DO.C.Vocab['ldpinbox']['@id'], iri);
         }
       }
@@ -2835,48 +2840,42 @@ console.log(reason);
         })
     },
 
-    updateContactsOutbox: function(iri, s) {
-      var checkOutbox = function(s) {
-        var outbox = auth.getAgentOutbox(s);
-
-        if (outbox) {
-          return Promise.resolve(outbox)
-        }
-        else {
-          return Promise.reject()
-        }
-      }
-
-      return checkOutbox(s)
-        .then(outboxes => {
-          DO.C.User.Contacts[iri]['Outbox'] = outboxes;
-        })
-    },
-
     nextLevelButton: function(button, url, id, action) {
       var actionNode = document.getElementById(id + '-' + action);
 
       button.addEventListener('click', function(){
         if(button.parentNode.classList.contains('container')){
-          fetcher.getResourceGraph(url).then(
-            function(g){
+          fetcher.getResourceGraph(url).then(function(g){
               actionNode.textContent = (action == 'write') ? url + DO.U.generateAttributeId() : url;
               return DO.U.generateBrowserList(g, url, id, action);
             },
             function(reason){
               var inputBox = document.getElementById(id);
-              switch(reason.slice(-3)) { // TODO: simplerdf needs to pass status codes better than in a string.
+              var statusCode = ('status' in reason) ? reason.status : 0;
+              statusCode = (typeof statusCode === 'string') ? parseInt(reason.slice(-3)) : statusCode;
+// console.log(statusCode)
+
+              var msgs = inputBox.querySelectorAll('.response-message');
+              for(var i = 0; i < msgs.length; i++){
+                msgs[i].parentNode.removeChild(msgs[i]);
+              }
+
+              switch(statusCode) {
                 default:
-                  inputBox.insertAdjacentHTML('beforeend', '<div class="response-message"><p class="error">Unable to access ('+ reason +').</p>');
+                  inputBox.insertAdjacentHTML('beforeend', '<div class="response-message"><p class="error">Unable to access ('+ reason.statusText +').</p>');
                   break;
-                case '404':
+                case 404:
                   inputBox.insertAdjacentHTML('beforeend', '<div class="response-message"><p class="error">Not found.</p></div>');
                   break;
-                case '401': case '403':
-                  var msg = 'You don\'t have permission to access this location.';
+                case 401:
+                  var msg = 'You are not authorized.';
                   if(!DO.C.User.IRI){
-                    msg += '</p><p>Try signing in to access your datastore.';
+                    msg += ' Try signing in.';
                   }
+                  inputBox.insertAdjacentHTML('beforeend', '<div class="response-message"><p class="error">' + msg + '</p></div>');
+                  break;
+                case 403:
+                  var msg = 'You don\'t have permission to access this location.';
                   inputBox.insertAdjacentHTML('beforeend', '<div class="response-message"><p class="error">' + msg + '</p></div>');
                   break;
               }
@@ -2985,6 +2984,7 @@ console.log(reason);
     triggerBrowse: function(url, id, action){
       var inputBox = document.getElementById(id);
       if (url.length > 10 && url.match(/^https?:\/\//g) && url.slice(-1) == "/"){
+console.log(url)
         fetcher.getResourceGraph(url).then(function(g){
           DO.U.generateBrowserList(g, url, id, action).then(function(l){
             return l;
@@ -2995,20 +2995,34 @@ console.log(reason);
         },
         function(reason){
           var list = document.getElementById(id + '-ul');
-          switch(reason.slice(-3)) { // TODO: simplerdf needs to pass status codes better than in a string.
+          var statusCode = ('status' in reason) ? reason.status : 0;
+          statusCode = (typeof statusCode === 'string') ? parseInt(reason.slice(-3)) : statusCode;
+// console.log(statusCode)
+
+          var msgs = inputBox.querySelectorAll('.response-message');
+          for(var i = 0; i < msgs.length; i++){
+            msgs[i].parentNode.removeChild(msgs[i]);
+          }
+
+          switch(statusCode) {
             default:
-              inputBox.insertAdjacentHTML('beforeend', '<div class="response-message"><p class="error">Unable to access ('+ reason +').</p>');
+              inputBox.insertAdjacentHTML('beforeend', '<div class="response-message"><p class="error">Unable to access ('+ reason.statusText +').</p>');
               break;
-            case '404':
+            case 404:
               inputBox.insertAdjacentHTML('beforeend', '<div class="response-message"><p class="error">Not found.</p></div>');
               break;
-            case '401': case '403':
-              var msg = 'You don\'t have permission to access this location.';
+            case 401:
+              var msg = 'You are not authorized.';
               if(!DO.C.User.IRI){
-                msg += '</p><p>Try signing in to access your datastore.';
+                msg += ' Try signing in.';
               }
               inputBox.insertAdjacentHTML('beforeend', '<div class="response-message"><p class="error">' + msg + '</p></div>');
               break;
+            case 403:
+              var msg = 'You don\'t have permission to access this location.';
+              inputBox.insertAdjacentHTML('beforeend', '<div class="response-message"><p class="error">' + msg + '</p></div>');
+              break;
+
           }
         });
       }
@@ -3021,7 +3035,7 @@ console.log(reason);
       id = id || 'browser-location';
       action = action || 'write';
 
-      parent.insertAdjacentHTML('beforeend', '<div id="' + id + '"><label for="' + id +'-input">URL</label> <input type="text" id="' + id +'-input" name="' + id + '-input" placeholder="https://example.org/path/to/" /><button id="' + id +'-update" disabled="disabled">Browse</button></div>\n\
+      parent.insertAdjacentHTML('beforeend', '<div id="' + id + '"><label for="' + id +'-input">URL</label> <input type="text" id="' + id +'-input" name="' + id + '-input" placeholder="https://example.org/path/to/" /><button id="' + id +'-update" disabled="disabled" title="Browse location">Browse</button></div>\n\
       <div id="' + id +'-contents"></div>');
 
       var inputBox = document.getElementById(id);
@@ -3030,6 +3044,11 @@ console.log(reason);
       var browseButton = document.getElementById(id + '-update');
 
       input.addEventListener('keyup', function(e){
+        var msgs = document.getElementById(id).querySelectorAll('.response-message');
+        for(var i = 0; i < msgs.length; i++){
+          msgs[i].parentNode.removeChild(msgs[i]);
+        }
+
         var actionNode = document.getElementById(id + '-' + action);
         if (input.value.length > 10 && input.value.match(/^https?:\/\//g) && input.value.slice(-1) == "/") {
           browseButton.removeAttribute('disabled');
@@ -3084,7 +3103,7 @@ console.log(reason);
       action = action || 'write';
 
       var browserHTML = '<aside id="resource-browser-' + id + '" class="do on">' + DO.C.Button.Close + '<h2>Resource Browser</h2></aside>';
-      document.documentElement.appendChild(DO.U.fragmentFromString(browserHTML));
+      document.documentElement.appendChild(util.fragmentFromString(browserHTML));
 
       DO.U.setupResourceBrowser(document.getElementById('resource-browser-' + id), id, action);
       document.getElementById('resource-browser-' + id).insertAdjacentHTML('beforeend', '<p><samp id="' + id + '-' + action + '"></samp></p>');
@@ -3108,7 +3127,7 @@ console.log(reason);
       if(typeof e !== 'undefined') {
         e.target.disabled = true;
       }
-      document.documentElement.appendChild(DO.U.fragmentFromString('<aside id="open-document" class="do on">' + DO.C.Button.Close + '<h2>Open Document</h2><p><label for="open-local-file">Open local file</label> <input type="file" id="open-local-file" name="open-local-file" /></p></aside>'));
+      document.documentElement.appendChild(util.fragmentFromString('<aside id="open-document" class="do on">' + DO.C.Button.Close + '<h2>Open Document</h2><p><label for="open-local-file">Open local file</label> <input type="file" id="open-local-file" name="open-local-file" /></p></aside>'));
 
       var id = 'location-open-document';
       var action = 'read';
@@ -3116,7 +3135,7 @@ console.log(reason);
       var openDocument = document.getElementById('open-document');
       DO.U.setupResourceBrowser(openDocument , id, action);
       var idSamp = (typeof DO.C.User.Storage == 'undefined') ? '' : '<p><samp id="' + id + '-' + action + '">https://example.org/path/to/article</samp></p>';
-      openDocument.insertAdjacentHTML('beforeend', idSamp + '<button class="open">Open</button>');
+      openDocument.insertAdjacentHTML('beforeend', idSamp + '<button class="open" title="Open document">Open</button>');
 
       openDocument.addEventListener('click', function (e) {
         if (e.target.closest('button.close')) {
@@ -3191,7 +3210,7 @@ console.log(reason);
 // console.log(documentHasDokieli);
 // console.log(documentHasDokieli.length)
         if(documentHasDokieli.length == 0) {
-          var doFiles = ['font-awesome.min.css', 'do.css', 'simplerdf.js', 'medium-editor.min.js', 'do.js'];
+          var doFiles = ['do.css', 'do.js'];
           doFiles.forEach(function(i){
 // console.log(i);
             var media = i.endsWith('.css') ? template.querySelectorAll('head link[rel~="stylesheet"][href$="/' + i + '"]') : template.querySelectorAll('head script[src$="/' + i + '"]');
@@ -3199,13 +3218,10 @@ console.log(reason);
 // console.log(media.length)
             if (media.length == 0) {
               switch(i) {
-                case 'font-awesome.min.css':
-                  template.querySelector('head').insertAdjacentHTML('beforeend', '<link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" media="all" rel="stylesheet" />');
-                  break;
                 case 'do.css':
                   template.querySelector('head').insertAdjacentHTML('beforeend', '<link href="https://dokie.li/media/css/' + i + '" media="all" rel="stylesheet" />');
                   break;
-                case 'simplerdf.js': case 'medium-editor.min.js': case 'do.js':
+                case 'do.js':
                   template.querySelector('head').insertAdjacentHTML('beforeend', '<script src="https://dokie.li/scripts/' + i + '"></script>')
                   break;
               }
@@ -3239,7 +3255,7 @@ console.log(reason);
             catch(e) { console.log('Cannot change pushState due to cross-origin.'); }
           }
         }
-        DO.U.init();
+        DO.C.init();
       }
       else {
 console.log('//TODO: Handle server returning wrong Response/Content-Type for the Request/Accept');
@@ -3249,7 +3265,7 @@ console.log('//TODO: Handle server returning wrong Response/Content-Type for the
 
     createNewDocument: function createNewDocument (e) {
       e.target.disabled = true
-      document.documentElement.appendChild(DO.U.fragmentFromString('<aside id="create-new-document" class="do on">' + DO.C.Button.Close + '<h2>Create New Document</h2></aside>'))
+      document.documentElement.appendChild(util.fragmentFromString('<aside id="create-new-document" class="do on">' + DO.C.Button.Close + '<h2>Create New Document</h2></aside>'))
 
       var newDocument = document.getElementById('create-new-document')
       newDocument.addEventListener('click', e => {
@@ -3267,7 +3283,7 @@ console.log('//TODO: Handle server returning wrong Response/Content-Type for the
 
       newDocument.insertAdjacentHTML('beforeend', baseURLSelection +
         '<p>Your new document will be saved at <samp id="' + id + '-' + action +
-        '">https://example.org/path/to/article</samp></p><button class="create">Create</button>')
+        '">https://example.org/path/to/article</samp></p><button class="create" title="Create new document">Create</button>')
 
       var bli = document.getElementById(id + '-input')
       bli.focus()
@@ -3316,21 +3332,27 @@ console.log('//TODO: Handle server returning wrong Response/Content-Type for the
           })
 
           .catch(error => {
-            console.error('Error creating a new document:', error)
+            console.log('Error creating a new document:')
+            console.error(error)
 
             let message
 
             switch (error.status) {
               case 0:
               case 405:
-                message = 'this location is not writable'
+                message = 'this location is not writable.'
                 break
               case 401:
+                message = 'you are not authorized.'
+                if(!DO.C.User.IRI){
+                  message += ' Try signing in.';
+                }
+                break
               case 403:
-                message = 'you do not have permission to write here'
+                message = 'you do not have permission to write here.'
                 break
               case 406:
-                message = 'enter a name for your resource'
+                message = 'enter a name for your resource.'
                 break
               default:
                 message = error.message
@@ -3347,7 +3369,7 @@ console.log('//TODO: Handle server returning wrong Response/Content-Type for the
 
     saveAsDocument: function saveAsDocument (e) {
       e.target.disabled = true;
-      document.documentElement.appendChild(DO.U.fragmentFromString('<aside id="save-as-document" class="do on">' + DO.C.Button.Close + '<h2>Save As Document</h2></aside>'));
+      document.documentElement.appendChild(util.fragmentFromString('<aside id="save-as-document" class="do on">' + DO.C.Button.Close + '<h2>Save As Document</h2></aside>'));
 
       var saveAsDocument = document.getElementById('save-as-document');
       saveAsDocument.addEventListener('click', function(e) {
@@ -3415,7 +3437,7 @@ console.log('//TODO: Handle server returning wrong Response/Content-Type for the
       saveAsDocument.insertAdjacentHTML('beforeend', '<fieldset id="' + id + '-fieldset"><legend>Save to</legend></fieldset>');
       fieldset = saveAsDocument.querySelector('fieldset#' + id + '-fieldset');
       DO.U.setupResourceBrowser(fieldset, id, action);
-      fieldset.insertAdjacentHTML('beforeend', '<p>Article will be saved at: <samp id="' + id + '-' + action + '"></samp></p>' + DO.U.getBaseURLSelection() + '<p><input type="checkbox" id="derivation-data" name="derivation-data" checked="checked" /><label for="derivation-data">Derivation data</label></p><button class="create">Save</button>');
+      fieldset.insertAdjacentHTML('beforeend', '<p>Article will be saved at: <samp id="' + id + '-' + action + '"></samp></p>' + DO.U.getBaseURLSelection() + '<p><input type="checkbox" id="derivation-data" name="derivation-data" checked="checked" /><label for="derivation-data">Derivation data</label></p><button class="create" title="Save to destination">Save</button>');
       var bli = document.getElementById(id + '-input');
       bli.focus();
       bli.placeholder = 'https://example.org/path/to/article';
@@ -3496,7 +3518,6 @@ console.log('//TODO: Handle server returning wrong Response/Content-Type for the
         progress = saveAsDocument.querySelector('progress')
 
         fetcher.putResource(storageIRI, html, null, null, { 'progress': progress })
-
           .then(response => {
             progress.parentNode.removeChild(progress)
 
@@ -3513,21 +3534,29 @@ console.log('//TODO: Handle server returning wrong Response/Content-Type for the
           })
 
           .catch(error => {
-            console.error('Error saving document', error)
+            console.log('Error saving document:')
+            console.error(error)
+
+            progress.parentNode.removeChild(progress)
 
             let message
 
             switch (error.status) {
               case 0:
               case 405:
-                message = 'this location is not writable'
+                message = 'this location is not writable.'
                 break
               case 401:
+                message = 'you are not authorized.'
+                if(!DO.C.User.IRI){
+                  message += ' Try signing in.';
+                }
+                break
               case 403:
-                message = 'you do not have permission to write here'
+                message = 'you do not have permission to write here.'
                 break
               case 406:
-                message = 'enter a name for your resource'
+                message = 'enter a name for your resource.'
                 break
               default:
                 message = error.message
@@ -3536,7 +3565,7 @@ console.log('//TODO: Handle server returning wrong Response/Content-Type for the
 
             saveAsDocument.insertAdjacentHTML('beforeend',
               '<div class="response-message"><p class="error">' +
-              'Unable to save:' + message + '</p></div>'
+              'Unable to save: ' + message + '</p></div>'
             )
           })
       })
@@ -3544,7 +3573,7 @@ console.log('//TODO: Handle server returning wrong Response/Content-Type for the
 
     viewSource: function(e) {
       e.target.disabled = true;
-      document.documentElement.appendChild(DO.U.fragmentFromString('<aside id="source-view" class="do on">' + DO.C.Button.Close + '<h2>Source</h2><textarea id="source-edit" rows="24" cols="80"></textarea><p><button class="create">Update</button></p></aside>'));
+      document.documentElement.appendChild(util.fragmentFromString('<aside id="source-view" class="do on">' + DO.C.Button.Close + '<h2>Source</h2><textarea id="source-edit" rows="24" cols="80"></textarea><p><button class="create" title="Update source">Update</button></p></aside>'));
       var sourceBox = document.getElementById('source-view');
       var input = document.getElementById('source-edit');
       input.value = doc.getDocument();
@@ -3917,30 +3946,8 @@ console.log('//TODO: Handle server returning wrong Response/Content-Type for the
         return (document.getElementById(string)) ? string + '-x' : string;
       }
       else {
-        return DO.U.generateUUID();
+        return util.generateUUID();
       }
-    },
-
-    // MIT license
-    // http://stackoverflow.com/questions/105034/how-to-create-a-guid-uuid-in-javascript/21963136#21963136
-    generateUUID: function() {
-      var lut = []; for (var i=0; i<256; i++) { lut[i] = (i<16?'0':'')+(i).toString(16); }
-      var s = function() {
-        var d0 = Math.random()*0xffffffff|0;
-        var d1 = Math.random()*0xffffffff|0;
-        var d2 = Math.random()*0xffffffff|0;
-        var d3 = Math.random()*0xffffffff|0;
-        return lut[d0&0xff]+lut[d0>>8&0xff]+lut[d0>>16&0xff]+lut[d0>>24&0xff]+'-'+
-        lut[d1&0xff]+lut[d1>>8&0xff]+'-'+lut[d1>>16&0x0f|0x40]+lut[d1>>24&0xff]+'-'+
-        lut[d2&0x3f|0x80]+lut[d2>>8&0xff]+'-'+lut[d2>>16&0xff]+lut[d2>>24&0xff]+
-        lut[d3&0xff]+lut[d3>>8&0xff]+lut[d3>>16&0xff]+lut[d3>>24&0xff];
-      };
-      return s();
-    },
-
-    //http://stackoverflow.com/a/25214113
-    fragmentFromString: function(strHTML) {
-      return document.createRange().createContextualFragment(strHTML);
     },
 
     SPARQLQueryURL: {
@@ -4277,10 +4284,12 @@ WHERE {\n\
       var documentURL = uri.stripFragmentFromString(document.location.href);
 
       var note = g.child(noteIRI);
-
       if (note.asobject && note.asobject.at(0)) {
         note = g.child(note.asobject.at(0))
       }
+// console.log(noteIRI)
+// console.log(note.toString())
+// console.log(note)
 
       var id = String(Math.abs(DO.U.hashCode(noteIRI)));
       var refId = 'r-' + id;
@@ -4333,9 +4342,10 @@ WHERE {\n\
         bodyText = body.rdfvalue;
 // console.log(bodyText);
 
-
+// console.log(documentURL)
         if (note.oahasTarget && !note.oahasTarget.startsWith(documentURL)) {
-          return Promise.reject();
+          // return Promise.reject();
+          return;
         }
 
         var target = g.child(note.oahasTarget);
@@ -4396,7 +4406,7 @@ WHERE {\n\
 
         var containerNodeTextContent = containerNode.textContent;
         //XXX: Seems better?
-        // var containerNodeTextContent = DO.U.fragmentFromString(doc.getDocument(containerNode)).textContent.trim();
+        // var containerNodeTextContent = util.fragmentFromString(doc.getDocument(containerNode)).textContent.trim();
 
 //console.log(containerNodeTextContent);
 // console.log(prefix + exact + suffix);
@@ -4460,9 +4470,8 @@ WHERE {\n\
 <blockquote cite="' + noteIRI + '">'+ note + '</blockquote>\n\
 </aside>\n\
 ';
-          var asideNode = DO.U.fragmentFromString(asideNote);
-          var parentSection = MediumEditor.util.getClosestTag(selectedParentNode, 'section')
-          || MediumEditor.util.getClosestTag(selectedParentNode, 'div') || MediumEditor.util.getClosestTag(selectedParentNode, 'article') || MediumEditor.util.getClosestTag(selectedParentNode, 'main') || MediumEditor.util.getClosestTag(selectedParentNode, 'body');
+          var asideNode = util.fragmentFromString(asideNote);
+          var parentSection = doc.getClosestSectionNode(selectedParentNode);
           parentSection.appendChild(asideNode);
           //XXX: Keeping this comment around for emergency
 //                selectedParentNode.parentNode.insertBefore(asideNode, selectedParentNode.nextSibling);
@@ -4478,7 +4487,7 @@ WHERE {\n\
                   .then(() => {
                     var aside = noteDelete.closest('aside.do')
                     aside.parentNode.removeChild(aside)
-                    var span = document.querySelector('span[about="#' + refId + '"]')
+                    var span = document.querySelector('span[resource="#' + refId + '"]')
                     span.outerHTML = span.querySelector('mark').textContent
                     // TODO: Delete notification or send delete activity
                   })
@@ -4601,115 +4610,6 @@ WHERE {\n\
       return Object.keys(prefixes).map(function(i){ return i + ': ' + prefixes[i]; }).join(' ');
     },
 
-    createHTML: function(title, main, options) {
-      title = title || '';
-      options = options || {};
-      var prefix = ('prefixes' in options && Object.keys(options.prefixes).length > 0) ? ' prefix="' + DO.U.getRDFaPrefixHTML(options.prefixes) + '"' : '';
-
-      return '<!DOCTYPE html>\n\
-<html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml">\n\
-  <head>\n\
-    <meta charset="utf-8" />\n\
-    <title>' + title + '</title>\n\
-  </head>\n\
-  <body' + prefix + '>\n\
-    <main>\n\
-' + main + '\n\
-    </main>\n\
-  </body>\n\
-</html>\n\
-';
-    },
-
-    createActivityHTML: function(o) {
-      var prefixes = ' prefix="rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns# schema: http://schema.org/ oa: http://www.w3.org/ns/oa# as: https://www.w3.org/ns/activitystreams#"';
-
-      var types = '<dt>Types</dt>'
-
-      o.type.forEach(function (t) {
-        types += '<dd><a about="" href="' + DO.C.Prefixes[t.split(':')[0]] + t.split(':')[1] + '" typeof="'+ t +'">' + t.split(':')[1] + '</a></dd>'
-      })
-
-      var asObjectTypes = ''
-      if ('object' in o && 'objectTypes' in o && o.objectTypes.length > 0) {
-        asObjectTypes = '<dl><dt>Types</dt>'
-        o.objectTypes.forEach(function(t){
-          asObjectTypes += '<dd><a about="' + o.object + '" href="' + t + '" typeof="'+ t +'">' + t + '</a></dd>'
-        })
-        asObjectTypes += '</dl>'
-      }
-
-      var asObjectLicense = ''
-      if ('object' in o && 'objectLicense' in o && o.objectLicense.length > 0) {
-        asObjectLicense = '<dl><dt>License</dt><dd><a about="' + o.object + '" href="' + o.objectLicense + '" property="schema:license">' + o.objectLicense + '</a></dd></dl>'
-      }
-
-      var asobject = ('object' in o) ? '<dt>Object</dt><dd><a href="' + o.object + '" property="as:object">' + o.object + '</a>' + asObjectTypes + asObjectLicense + '</dd>' : ''
-
-      var asinReplyTo = ('inReplyTo' in o) ? '<dt>In reply to</dt><dd><a href="' + o.inReplyTo + '" property="as:inReplyTo">' + o.inReplyTo + '</a></dd>' : ''
-
-      var ascontext = ('context' in o && o.context.length > 0) ? '<dt>Context</dt><dd><a href="' + o.context + '" property="as:context">' + o.context + '</a></dd>' : ''
-
-      var astarget = ('target' in o && o.target.length > 0) ? '<dt>Target</dt><dd><a href="' + o.target + '" property="as:target">' + o.target + '</a></dd>' : ''
-
-      var datetime = util.getDateTimeISO()
-      var asupdated = '<dt>Updated</dt><dd><time datetime="' + datetime + '" datatype="xsd:dateTime" property="as:updated" content="' + datetime + '">' + datetime.substr(0,19).replace('T', ' ') + '</time></dd>'
-
-      var assummary = ('summary' in o && o.summary.length > 0) ? '<dt>Summary</dt><dd property="as:summary" datatype="rdf:HTML">' + o.summary + '</dd>' : ''
-
-      var ascontent = ('content' in o && o.content.length > 0) ? '<dt>Content</dt><dd property="as:content" datatype="rdf:HTML">' + o.content + '</dd>' : ''
-
-      var asactor = (DO.C.User.IRI) ? '<dt>Actor</dt><dd><a href="' + DO.C.User.IRI + '" property="as:actor">' + DO.C.User.IRI + '</a></dd>' : ''
-
-      var license = '<dt>License</dt><dd><a href="' + DO.C.NotificationLicense + '" property="schema:license">' + DO.C.NotificationLicense + '</a></dd>'
-
-      var asto = ('to' in o && o.to.length > 0 && !o.to.match(/\s/g) && o.to.match(/^https?:\/\//gi)) ? '<dt>To</dt><dd><a href="' + o.to + '" property="as:to">' + o.to + '</a></dd>' : ''
-
-      var statements = ('statements' in o) ? o.statements : ''
-
-      var dl = [
-        types,
-        asobject,
-        ascontext,
-        astarget,
-        asupdated,
-        assummary,
-        ascontent,
-        asactor,
-        license,
-        asto
-      ].map(function (n) { if (n !== '') { return '      ' + n + '\n' } }).join('')
-
-
-      // TODO: Come up with a better title. reuse `types` e.g., Activity Created, Announced..
-      var title = 'Notification'
-      if(types.indexOf('as:Announce') > -1){
-        title += ': Announced'
-      } else if (types.indexOf('as:Create') > -1){
-        title += ': Created'
-      } else if (types.indexOf('as:Like') > -1){
-        title += ': Liked'
-      } else if (types.indexOf('as:Dislike') > -1){
-        title += ': Disliked'
-      } else if (types.indexOf('as:Add') > -1){
-        title += ': Added'
-      }
-
-      var data = '<article'+prefixes+'>\n\
-  <h1>' + title + '</h1>\n\
-  <section>\n\
-    <dl about="">\n\
-' + dl +
-'    </dl>\n\
-  </section>\n\
-  <section>\n\
-' + statements + '\n\
-  </section>\n\
-</article>'
-
-      return data
-    },
-
     createNoteDataHTML: function(n) {
 // console.log(n);
       var published = '';
@@ -4726,7 +4626,7 @@ WHERE {\n\
       var articleClass = '';
       var prefixes = ' prefix="rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns# schema: http://schema.org/ dcterms: http://purl.org/dc/terms/ oa: http://www.w3.org/ns/oa# as: https://www.w3.org/ns/activitystreams#"';
 
-      var canonicalId = n.canonical || 'urn:uuid:' + DO.U.generateUUID();
+      var canonicalId = n.canonical || 'urn:uuid:' + util.generateUUID();
 
       var motivatedByIRI = n.motivatedByIRI || '';
       var motivatedByLabel = '';
@@ -4763,10 +4663,10 @@ WHERE {\n\
       }
 
       switch(n.mode) {
-        default:
+        default: case 'read':
           hX = 3;
           if ('creator' in n && 'iri' in n.creator && n.creator.iri == DO.C.User.IRI) {
-            buttonDelete = '<button class="delete"><i class="fa fa-trash"></i></button>' ;
+            buttonDelete = '<button class="delete" title="Delete item"><svg class="fas fa-trash-alt" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M0 84V56c0-13.3 10.7-24 24-24h112l9.4-18.7c4-8.2 12.3-13.3 21.4-13.3h114.3c9.1 0 17.4 5.1 21.5 13.3L312 32h112c13.3 0 24 10.7 24 24v28c0 6.6-5.4 12-12 12H12C5.4 96 0 90.6 0 84zm416 56v324c0 26.5-21.5 48-48 48H80c-26.5 0-48-21.5-48-48V140c0-6.6 5.4-12 12-12h360c6.6 0 12 5.4 12 12zm-272 68c0-8.8-7.2-16-16-16s-16 7.2-16 16v224c0 8.8 7.2 16 16 16s16-7.2 16-16V208zm96 0c0-8.8-7.2-16-16-16s-16 7.2-16 16v224c0 8.8 7.2 16 16 16s16-7.2 16-16V208zm96 0c0-8.8-7.2-16-16-16s-16 7.2-16 16v224c0 8.8 7.2 16 16 16s16-7.2 16-16V208z"/></svg></button>' ;
           }
           articleClass = ' class="do"';
           break;
@@ -5168,6 +5068,35 @@ WHERE {\n\
         options['datetime'] = new Date();
       }
 
+      var documentAuthor = 'authors';
+      var documentAuthorName = 'author-name';
+      var dA = document.getElementById(documentAuthor);
+
+      if(dA) {
+        if (dA.classList && dA.classList.contains('do') > -1) {
+          dA.removeAttribute('class');
+        }
+        dA.removeAttribute('contenteditable');
+      }
+
+      var dANS = document.querySelectorAll('#' + documentAuthorName + ' .selected');
+      dANS.forEach(function(authorNameSelected) {
+        authorNameSelected.removeAttribute('class');
+        authorNameSelected.removeAttribute('contenteditable');
+      });
+
+      var dANE = document.querySelectorAll('#' + documentAuthorName + ' .do');
+      dANE.forEach(function(i){
+        i.parentNode.removeChild(i);
+      });
+
+      var dd = document.querySelectorAll('#' + documentAuthorName + ' dd');
+      if(dA && dd.length == 0) {
+        dA = document.getElementById(documentAuthor);
+        dA.parentNode.removeChild(dA);
+      }
+
+
       var documentLicense = 'document-license';
       var dLS = document.querySelector('#' + documentLicense + ' option:checked');
 
@@ -5288,6 +5217,7 @@ WHERE {\n\
           var s = SimpleRDF(DO.C.Vocab, options['subjectURI'], i, ld.store).child(options['subjectURI']);
 // console.log(s);
 
+          info['graph'] = s;
           info['rdftype'] = s.rdftype._array;
           info['profile'] = DO.C.Vocab['ldpRDFSource']['@id'];
 
@@ -5309,7 +5239,7 @@ WHERE {\n\
             }
             else {
               //URI-M
-  
+
               info['profile'] = DO.C.Vocab['memMemento']['@id'];
             }
           }
@@ -5361,6 +5291,7 @@ WHERE {\n\
       disableEditor: function(e) {
     //    _mediumEditors[1].destroy();
         DO.C.EditorEnabled = false;
+        DO.C.User.Role = 'social';
         document.removeEventListener('click', DO.U.updateDocumentTitle);
         return DO.U.Editor.MediumEditor.destroy();
       },
@@ -5371,7 +5302,7 @@ WHERE {\n\
         }
 
         if (!document.getElementById('document-editor')) {
-          document.documentElement.appendChild(DO.U.fragmentFromString('<aside id="document-editor" class="do"></aside>'))
+          document.documentElement.appendChild(util.fragmentFromString('<aside id="document-editor" class="do"></aside>'))
         }
 
         var editorOptions = {
@@ -5391,7 +5322,7 @@ WHERE {\n\
             },
             buttonLabels: DO.C.Editor.ButtonLabelType,
             toolbar: {
-              buttons: ['h2', 'h3', 'h4', 'em', 'strong', 'orderedlist', 'unorderedlist', 'code', 'pre', 'image', 'anchor', 'q', 'sparkline', 'rdfa', 'cite', 'note'],
+              buttons: ['h2', 'h3', 'h4', 'em', 'strong', 'orderedlist', 'unorderedlist', 'code', 'pre', 'anchor', 'q', 'sparkline', 'rdfa', 'cite', 'note'],
               diffLeft: 0,
               diffTop: -10,
               allowMultiParagraphSelection: false
@@ -5417,34 +5348,19 @@ WHERE {\n\
             elementsContainer: document.getElementById('document-editor'),
             buttonLabels: DO.C.Editor.ButtonLabelType,
             toolbar: {
-              buttons: ['selector', 'share', 'approve', 'bookmark', 'note'],
+              buttons: ['selector', 'share', 'approve', 'disapprove', 'specificity', 'bookmark', 'note'],
               allowMultiParagraphSelection: false
             },
             disableEditing: true,
             anchorPreview: false,
             extensions: {
               'selector': new DO.U.Editor.Note({action:'selector', label:'selector'}),
-              'note': new DO.U.Editor.Note({action:'article', label:'note'}),
-              'bookmark': new DO.U.Editor.Note({action:'bookmark', label:'bookmark'}),
               'share': new DO.U.Editor.Note({action:'share', label:'share'}),
-              'approve': new DO.U.Editor.Note({action:'approve', label:'approve'})
-            }
-          },
-
-          review: {
-            id: 'review',
-            elementsContainer: document.getElementById('document-editor'),
-            buttonLabels: DO.C.Editor.ButtonLabelType,
-            toolbar: {
-              buttons: ['approve', 'disapprove', 'specificity'],
-              allowMultiParagraphSelection: false
-            },
-            disableEditing: true,
-            anchorPreview: false,
-            extensions: {
+              'bookmark': new DO.U.Editor.Note({action:'bookmark', label:'bookmark'}),
               'approve': new DO.U.Editor.Note({action:'approve', label:'approve'}),
               'disapprove': new DO.U.Editor.Note({action:'disapprove', label:'disapprove'}),
-              'specificity': new DO.U.Editor.Note({action:'specificity', label:'specificity'})
+              'specificity': new DO.U.Editor.Note({action:'specificity', label:'specificity'}),
+              'note': new DO.U.Editor.Note({action:'article', label:'note'})
             }
           }
         };
@@ -5462,6 +5378,7 @@ WHERE {\n\
         var eNodes = selector || DO.U.selectArticleNode(document);
         var eOptions = editorOptions[editorMode];
         DO.C.User.Role = editorMode;
+        storage.updateStorageProfile(DO.C.User);
 
         if (typeof MediumEditor !== 'undefined') {
           DO.U.Editor.MediumEditor = new MediumEditor(eNodes, eOptions);
@@ -5470,6 +5387,60 @@ WHERE {\n\
           if (e && e.target.closest('button.editor-enable')) {
             DO.C.ContentEditable = true;
             document.addEventListener('click', DO.U.updateDocumentTitle);
+
+            //FIXME: This is a horrible way of hacking MediumEditorTable
+            document.querySelectorAll('i.fa-table').forEach(function(i){
+              var icon = '<svg class="fas fa-table" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M464 32H48C21.49 32 0 53.49 0 80v352c0 26.51 21.49 48 48 48h416c26.51 0 48-21.49 48-48V80c0-26.51-21.49-48-48-48zM224 416H64v-96h160v96zm0-160H64v-96h160v96zm224 160H288v-96h160v96zm0-160H288v-96h160v96z"/></svg>';
+
+              i.parentNode.replaceChild(util.fragmentFromString(icon), i);
+            });
+
+            //FIXME: This is a horrible way of hacking MediumEditor
+            document.querySelectorAll('i.fa-link').forEach(function(i){
+              var icon = '<svg class="fas fa-link" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M326.612 185.391c59.747 59.809 58.927 155.698.36 214.59-.11.12-.24.25-.36.37l-67.2 67.2c-59.27 59.27-155.699 59.262-214.96 0-59.27-59.26-59.27-155.7 0-214.96l37.106-37.106c9.84-9.84 26.786-3.3 27.294 10.606.648 17.722 3.826 35.527 9.69 52.721 1.986 5.822.567 12.262-3.783 16.612l-13.087 13.087c-28.026 28.026-28.905 73.66-1.155 101.96 28.024 28.579 74.086 28.749 102.325.51l67.2-67.19c28.191-28.191 28.073-73.757 0-101.83-3.701-3.694-7.429-6.564-10.341-8.569a16.037 16.037 0 0 1-6.947-12.606c-.396-10.567 3.348-21.456 11.698-29.806l21.054-21.055c5.521-5.521 14.182-6.199 20.584-1.731a152.482 152.482 0 0 1 20.522 17.197zM467.547 44.449c-59.261-59.262-155.69-59.27-214.96 0l-67.2 67.2c-.12.12-.25.25-.36.37-58.566 58.892-59.387 154.781.36 214.59a152.454 152.454 0 0 0 20.521 17.196c6.402 4.468 15.064 3.789 20.584-1.731l21.054-21.055c8.35-8.35 12.094-19.239 11.698-29.806a16.037 16.037 0 0 0-6.947-12.606c-2.912-2.005-6.64-4.875-10.341-8.569-28.073-28.073-28.191-73.639 0-101.83l67.2-67.19c28.239-28.239 74.3-28.069 102.325.51 27.75 28.3 26.872 73.934-1.155 101.96l-13.087 13.087c-4.35 4.35-5.769 10.79-3.783 16.612 5.864 17.194 9.042 34.999 9.69 52.721.509 13.906 17.454 20.446 27.294 10.606l37.106-37.106c59.271-59.259 59.271-155.699.001-214.959z"/></svg>';
+
+              i.parentNode.replaceChild(util.fragmentFromString(icon), i);
+            });
+
+
+            var documentAuthors = 'authors';
+            var authors = document.getElementById(documentAuthors);
+
+            if (!authors) {
+              var authors = '<div class="do" id="' + documentAuthors + '"><dl id="author-name"><dt>Authors</dt></dl></div>';
+              DO.U.insertDocumentLevelHTML(document, authors, { 'id': documentAuthors });
+              authors = document.getElementById(documentAuthors);
+            }
+
+            var authorName = 'author-name';
+            var documentAuthorName = document.getElementById(authorName);
+
+            var sa = DO.C['ResourceInfo'].graph.schemaauthor;
+
+            //If not one of the authors, offer to add self
+            if(DO.C.User.IRI && sa.indexOf(DO.C.User.IRI) < 0){
+              var userHTML = auth.getUserHTML({'avatarSize': 32});
+              var authorId = (DO.C.User.Name) ? ' id="' + DO.U.generateAttributeId(null, DO.C.User.Name) + '"' : '';
+
+              documentAuthorName.insertAdjacentHTML('beforeend', '<dd class="do"' + authorId + ' inlist="" rel="bibo:authorList"><span about="" rel="schema:author">' + userHTML + '</span><button class="add-author-name" contenteditable="false" title="Add author"><svg class="fas fa-plus" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M416 208H272V64c0-17.67-14.33-32-32-32h-32c-17.67 0-32 14.33-32 32v144H32c-17.67 0-32 14.33-32 32v32c0 17.67 14.33 32 32 32h144v144c0 17.67 14.33 32 32 32h32c17.67 0 32-14.33 32-32V304h144c17.67 0 32-14.33 32-32v-32c0-17.67-14.33-32-32-32z"/></svg></button></dd>');
+            }
+
+            //Invite other other authors
+            documentAuthorName.insertAdjacentHTML('beforeend', '<dd class="do"><button class="invite-author" contenteditable="false" title="Invite people to author"><svg class="fas fa-bullhorn" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><path d="M576 240c0-23.63-12.95-44.04-32-55.12V32.01C544 23.26 537.02 0 512 0c-7.12 0-14.19 2.38-19.98 7.02l-85.03 68.03C364.28 109.19 310.66 128 256 128H64c-35.35 0-64 28.65-64 64v96c0 35.35 28.65 64 64 64h33.7c-1.39 10.48-2.18 21.14-2.18 32 0 39.77 9.26 77.35 25.56 110.94 5.19 10.69 16.52 17.06 28.4 17.06h74.28c26.05 0 41.69-29.84 25.9-50.56-16.4-21.52-26.15-48.36-26.15-77.44 0-11.11 1.62-21.79 4.41-32H256c54.66 0 108.28 18.81 150.98 52.95l85.03 68.03a32.023 32.023 0 0 0 19.98 7.02c24.92 0 32-22.78 32-32V295.13C563.05 284.04 576 263.63 576 240zm-96 141.42l-33.05-26.44C392.95 311.78 325.12 288 256 288v-96c69.12 0 136.95-23.78 190.95-66.98L480 98.58v282.84z"/></svg></button></dd>');
+            authors = document.getElementById(documentAuthors);
+
+            authors.addEventListener('click', function(e){
+              var button = e.target.closest('button.add-author-name');
+              if(button){
+                e.target.closest('dd').classList.add('selected');
+                button.parentNode.removeChild(button);
+              }
+
+              if (e.target.closest('button.invite-author')) {
+                DO.U.shareResource(e);
+                e.target.removeAttribute('disabled');
+              }
+            });
 
             var documentLicense = 'document-license';
             var license = document.getElementById(documentLicense);
@@ -5500,11 +5471,8 @@ WHERE {\n\
                 dSS.querySelector('option[value="' + e.target.value + '"]').setAttribute('selected', 'selected');
               });
             }
-
           }
-          else if (e && (e.target.closest('button.editor-disable') || e.target.closest('button.review-enable'))) {
-            DO.C.ContentEditable = false;
-
+          else if (e && e.target.closest('button.editor-disable')) {
             DO.U.setEditSelections();
           }
 
@@ -5518,6 +5486,14 @@ WHERE {\n\
 
       Button: (function () {
         if (typeof MediumEditor !== 'undefined') {
+          MediumEditor.extensions.button.prototype.defaults.unorderedlist.contentFA = '<svg class="fas fa-link-ul" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M96 96c0 26.51-21.49 48-48 48S0 122.51 0 96s21.49-48 48-48 48 21.49 48 48zM48 208c-26.51 0-48 21.49-48 48s21.49 48 48 48 48-21.49 48-48-21.49-48-48-48zm0 160c-26.51 0-48 21.49-48 48s21.49 48 48 48 48-21.49 48-48-21.49-48-48-48zm96-236h352c8.837 0 16-7.163 16-16V76c0-8.837-7.163-16-16-16H144c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16zm0 160h352c8.837 0 16-7.163 16-16v-40c0-8.837-7.163-16-16-16H144c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16zm0 160h352c8.837 0 16-7.163 16-16v-40c0-8.837-7.163-16-16-16H144c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16z"/></svg>';
+
+            MediumEditor.extensions.button.prototype.defaults.orderedlist.contentFA = '<svg class="fas fa-link-ol" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M3.263 139.527c0-7.477 3.917-11.572 11.573-11.572h15.131V88.078c0-5.163.534-10.503.534-10.503h-.356s-1.779 2.67-2.848 3.738c-4.451 4.273-10.504 4.451-15.666-1.068l-5.518-6.231c-5.342-5.341-4.984-11.216.534-16.379l21.72-19.938C32.815 33.602 36.732 32 42.785 32H54.89c7.656 0 11.749 3.916 11.749 11.572v84.384h15.488c7.655 0 11.572 4.094 11.572 11.572v8.901c0 7.477-3.917 11.572-11.572 11.572H14.836c-7.656 0-11.573-4.095-11.573-11.572v-8.902zM2.211 304.591c0-47.278 50.955-56.383 50.955-69.165 0-7.18-5.954-8.755-9.28-8.755-3.153 0-6.479 1.051-9.455 3.852-5.079 4.903-10.507 7.004-16.111 2.451l-8.579-6.829c-5.779-4.553-7.18-9.805-2.803-15.409C13.592 201.981 26.025 192 47.387 192c19.437 0 44.476 10.506 44.476 39.573 0 38.347-46.753 46.402-48.679 56.909h39.049c7.529 0 11.557 4.027 11.557 11.382v8.755c0 7.354-4.028 11.382-11.557 11.382h-67.94c-7.005 0-12.083-4.028-12.083-11.382v-4.028zM5.654 454.61l5.603-9.28c3.853-6.654 9.105-7.004 15.584-3.152 4.903 2.101 9.63 3.152 14.359 3.152 10.155 0 14.358-3.502 14.358-8.23 0-6.654-5.604-9.106-15.934-9.106h-4.728c-5.954 0-9.28-2.101-12.258-7.88l-1.05-1.926c-2.451-4.728-1.226-9.806 2.801-14.884l5.604-7.004c6.829-8.405 12.257-13.483 12.257-13.483v-.35s-4.203 1.051-12.608 1.051H16.685c-7.53 0-11.383-4.028-11.383-11.382v-8.755c0-7.53 3.853-11.382 11.383-11.382h58.484c7.529 0 11.382 4.027 11.382 11.382v3.327c0 5.778-1.401 9.806-5.079 14.183l-17.509 20.137c19.611 5.078 28.716 20.487 28.716 34.845 0 21.363-14.358 44.126-48.503 44.126-16.636 0-28.192-4.728-35.896-9.455-5.779-4.202-6.304-9.805-2.626-15.934zM144 132h352c8.837 0 16-7.163 16-16V76c0-8.837-7.163-16-16-16H144c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16zm0 160h352c8.837 0 16-7.163 16-16v-40c0-8.837-7.163-16-16-16H144c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16zm0 160h352c8.837 0 16-7.163 16-16v-40c0-8.837-7.163-16-16-16H144c-8.837 0-16 7.163-16 16v40c0 8.837 7.163 16 16 16z"/></svg>';
+
+          MediumEditor.extensions.button.prototype.defaults.image.contentFA = '<svg class="fas fa-image" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M464 448H48c-26.51 0-48-21.49-48-48V112c0-26.51 21.49-48 48-48h416c26.51 0 48 21.49 48 48v288c0 26.51-21.49 48-48 48zM112 120c-30.928 0-56 25.072-56 56s25.072 56 56 56 56-25.072 56-56-25.072-56-56-56zM64 384h384V272l-87.515-87.515c-4.686-4.686-12.284-4.686-16.971 0L208 320l-55.515-55.515c-4.686-4.686-12.284-4.686-16.971 0L64 336v48z"/></svg>';
+
+          MediumEditor.extensions.button.prototype.defaults.pre.contentFA = '<svg class="fas fa-code" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><path d="M278.9 511.5l-61-17.7c-6.4-1.8-10-8.5-8.2-14.9L346.2 8.7c1.8-6.4 8.5-10 14.9-8.2l61 17.7c6.4 1.8 10 8.5 8.2 14.9L293.8 503.3c-1.9 6.4-8.5 10.1-14.9 8.2zm-114-112.2l43.5-46.4c4.6-4.9 4.3-12.7-.8-17.2L117 256l90.6-79.7c5.1-4.5 5.5-12.3.8-17.2l-43.5-46.4c-4.5-4.8-12.1-5.1-17-.5L3.8 247.2c-5.1 4.7-5.1 12.8 0 17.5l144.1 135.1c4.9 4.6 12.5 4.4 17-.5zm327.2.6l144.1-135.1c5.1-4.7 5.1-12.8 0-17.5L492.1 112.1c-4.8-4.5-12.4-4.3-17 .5L431.6 159c-4.6 4.9-4.3 12.7.8 17.2L523 256l-90.6 79.7c-5.1 4.5-5.5 12.3-.8 17.2l43.5 46.4c4.5 4.9 12.1 5.1 17 .6z"/></svg>';
+
           return MediumEditor.extensions.button.extend({
             init: function () {
               this.name = this.label;
@@ -5528,11 +5504,15 @@ WHERE {\n\
               this.contentDefault = '<b>' + this.label + '</b>';
 
               switch(this.action) {
-                case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6': this.contentFA = '<i class="fa fa-header">' + parseInt(this.action.slice(-1)) + '</i>'; break;
-                case 'em': this.contentFA = '<i class="fa fa-italic"></i>'; break;
-                case 'strong': this.contentFA = '<i class="fa fa-bold"></i>'; break;
-                case 'q': this.contentFA = '<i class="fa fa-quote-right"></i>'; break;
-                case 'math': this.contentFA = '<i class="fa fa-calculator"></i>'; break;
+                case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6': this.contentFA = '<svg class="fas fa-header" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M496 80V48c0-8.837-7.163-16-16-16H320c-8.837 0-16 7.163-16 16v32c0 8.837 7.163 16 16 16h37.621v128H154.379V96H192c8.837 0 16-7.163 16-16V48c0-8.837-7.163-16-16-16H32c-8.837 0-16 7.163-16 16v32c0 8.837 7.163 16 16 16h37.275v320H32c-8.837 0-16 7.163-16 16v32c0 8.837 7.163 16 16 16h160c8.837 0 16-7.163 16-16v-32c0-8.837-7.163-16-16-16h-37.621V288H357.62v128H320c-8.837 0-16 7.163-16 16v32c0 8.837 7.163 16 16 16h160c8.837 0 16-7.163 16-16v-32c0-8.837-7.163-16-16-16h-37.275V96H480c8.837 0 16-7.163 16-16z"/></svg>' + parseInt(this.action.slice(-1)); break;
+
+                case 'em': this.contentFA = '<svg class="fas fa-italic" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><path d="M204.758 416h-33.849l62.092-320h40.725a16 16 0 0 0 15.704-12.937l6.242-32C297.599 41.184 290.034 32 279.968 32H120.235a16 16 0 0 0-15.704 12.937l-6.242 32C96.362 86.816 103.927 96 113.993 96h33.846l-62.09 320H46.278a16 16 0 0 0-15.704 12.935l-6.245 32C22.402 470.815 29.967 480 40.034 480h158.479a16 16 0 0 0 15.704-12.935l6.245-32c1.927-9.88-5.638-19.065-15.704-19.065z"/></svg>'; break;
+
+                case 'strong': this.contentFA = '<svg class="fas fa-bold" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><path d="M304.793 243.891c33.639-18.537 53.657-54.16 53.657-95.693 0-48.236-26.25-87.626-68.626-104.179C265.138 34.01 240.849 32 209.661 32H24c-8.837 0-16 7.163-16 16v33.049c0 8.837 7.163 16 16 16h33.113v318.53H24c-8.837 0-16 7.163-16 16V464c0 8.837 7.163 16 16 16h195.69c24.203 0 44.834-1.289 66.866-7.584C337.52 457.193 376 410.647 376 350.014c0-52.168-26.573-91.684-71.207-106.123zM142.217 100.809h67.444c16.294 0 27.536 2.019 37.525 6.717 15.828 8.479 24.906 26.502 24.906 49.446 0 35.029-20.32 56.79-53.029 56.79h-76.846V100.809zm112.642 305.475c-10.14 4.056-22.677 4.907-31.409 4.907h-81.233V281.943h84.367c39.645 0 63.057 25.38 63.057 63.057.001 28.425-13.66 52.483-34.782 61.284z"/></svg>'; break;
+
+                case 'q': this.contentFA = '<svg class="fas fa-quote-right" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M464 32H336c-26.5 0-48 21.5-48 48v128c0 26.5 21.5 48 48 48h80v64c0 35.3-28.7 64-64 64h-8c-13.3 0-24 10.7-24 24v48c0 13.3 10.7 24 24 24h8c88.4 0 160-71.6 160-160V80c0-26.5-21.5-48-48-48zm-288 0H48C21.5 32 0 53.5 0 80v128c0 26.5 21.5 48 48 48h80v64c0 35.3-28.7 64-64 64h-8c-13.3 0-24 10.7-24 24v48c0 13.3 10.7 24 24 24h8c88.4 0 160-71.6 160-160V80c0-26.5-21.5-48-48-48z"/></svg>'; break;
+
+                case 'math': this.contentFA = '<svg class="fas fa-calculator" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M400 0H48C22.4 0 0 22.4 0 48v416c0 25.6 22.4 48 48 48h352c25.6 0 48-22.4 48-48V48c0-25.6-22.4-48-48-48zM128 435.2c0 6.4-6.4 12.8-12.8 12.8H76.8c-6.4 0-12.8-6.4-12.8-12.8v-38.4c0-6.4 6.4-12.8 12.8-12.8h38.4c6.4 0 12.8 6.4 12.8 12.8v38.4zm0-128c0 6.4-6.4 12.8-12.8 12.8H76.8c-6.4 0-12.8-6.4-12.8-12.8v-38.4c0-6.4 6.4-12.8 12.8-12.8h38.4c6.4 0 12.8 6.4 12.8 12.8v38.4zm128 128c0 6.4-6.4 12.8-12.8 12.8h-38.4c-6.4 0-12.8-6.4-12.8-12.8v-38.4c0-6.4 6.4-12.8 12.8-12.8h38.4c6.4 0 12.8 6.4 12.8 12.8v38.4zm0-128c0 6.4-6.4 12.8-12.8 12.8h-38.4c-6.4 0-12.8-6.4-12.8-12.8v-38.4c0-6.4 6.4-12.8 12.8-12.8h38.4c6.4 0 12.8 6.4 12.8 12.8v38.4zm128 128c0 6.4-6.4 12.8-12.8 12.8h-38.4c-6.4 0-12.8-6.4-12.8-12.8V268.8c0-6.4 6.4-12.8 12.8-12.8h38.4c6.4 0 12.8 6.4 12.8 12.8v166.4zm0-256c0 6.4-6.4 12.8-12.8 12.8H76.8c-6.4 0-12.8-6.4-12.8-12.8V76.8C64 70.4 70.4 64 76.8 64h294.4c6.4 0 12.8 6.4 12.8 12.8v102.4z"/></svg>'; break;
                 default: break;
               }
 
@@ -5678,7 +5658,7 @@ WHERE {\n\
                           case "p": default:
                             var xSPE = document.createElement(sPE);
                             xSPE.appendChild(fragment.cloneNode(true));
-                            fragment = DO.U.fragmentFromString(xSPE.outerHTML);
+                            fragment = util.fragmentFromString(xSPE.outerHTML);
                             break;
                           //TODO: Other cases?
                         }
@@ -5783,6 +5763,7 @@ WHERE {\n\
                     MediumEditor.selection.selectNode(document.getElementById(selectionId), document);
                     break;
 
+                  //XXX: This is used for non-built-in buttons
                   default:
                     var selectionUpdated = '<' + tagNames[0] + datetime + '>' + this.base.selection + '</' + tagNames[0] + '>';
                     MediumEditor.util.insertHTMLCommand(this.base.selectedDocument, selectionUpdated);
@@ -5857,43 +5838,43 @@ WHERE {\n\
 
               switch(this.action) {
                 case 'cite': default:
-                  this.contentFA = '<i class="fa fa-hashtag"></i>';
+                  this.contentFA = '<svg class="fas fa-hashtag" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M440.667 182.109l7.143-40c1.313-7.355-4.342-14.109-11.813-14.109h-74.81l14.623-81.891C377.123 38.754 371.468 32 363.997 32h-40.632a12 12 0 0 0-11.813 9.891L296.175 128H197.54l14.623-81.891C213.477 38.754 207.822 32 200.35 32h-40.632a12 12 0 0 0-11.813 9.891L132.528 128H53.432a12 12 0 0 0-11.813 9.891l-7.143 40C33.163 185.246 38.818 192 46.289 192h74.81L98.242 320H19.146a12 12 0 0 0-11.813 9.891l-7.143 40C-1.123 377.246 4.532 384 12.003 384h74.81L72.19 465.891C70.877 473.246 76.532 480 84.003 480h40.632a12 12 0 0 0 11.813-9.891L151.826 384h98.634l-14.623 81.891C234.523 473.246 240.178 480 247.65 480h40.632a12 12 0 0 0 11.813-9.891L315.472 384h79.096a12 12 0 0 0 11.813-9.891l7.143-40c1.313-7.355-4.342-14.109-11.813-14.109h-74.81l22.857-128h79.096a12 12 0 0 0 11.813-9.891zM261.889 320h-98.634l22.857-128h98.634l-22.857 128z"/></svg>';
                   break;
                 case 'article':
-                  this.contentFA = '<i class="fa fa-sticky-note"></i>';
+                  this.contentFA = '<svg class="fas fa-sticky-note" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M312 320h136V56c0-13.3-10.7-24-24-24H24C10.7 32 0 42.7 0 56v400c0 13.3 10.7 24 24 24h264V344c0-13.2 10.8-24 24-24zm129 55l-98 98c-4.5 4.5-10.6 7-17 7h-6V352h128v6.1c0 6.3-2.5 12.4-7 16.9z"/></svg>';
                   this.signInRequired = true;
                   break;
                 case 'note':
-                  this.contentFA = '<i class="fa fa-sticky-note"></i>';
+                  this.contentFA = '<svg class="fas fa-sticky-note" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M312 320h136V56c0-13.3-10.7-24-24-24H24C10.7 32 0 42.7 0 56v400c0 13.3 10.7 24 24 24h264V344c0-13.2 10.8-24 24-24zm129 55l-98 98c-4.5 4.5-10.6 7-17 7h-6V352h128v6.1c0 6.3-2.5 12.4-7 16.9z"/></svg>';
                   break;
                 case 'rdfa':
-                  this.contentFA = '<i class="fa fa-rocket"></i>';
+                  this.contentFA = '<svg class="fas fa-rocket" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M505.1 19.1C503.8 13 499 8.2 492.9 6.9 460.7 0 435.5 0 410.4 0 307.2 0 245.3 55.2 199.1 128H94.9c-18.2 0-34.8 10.3-42.9 26.5L2.6 253.3c-8 16 3.6 34.7 21.5 34.7h95.1c-5.9 12.8-11.9 25.5-18 37.7-3.1 6.2-1.9 13.6 3 18.5l63.6 63.6c4.9 4.9 12.3 6.1 18.5 3 12.2-6.1 24.9-12 37.7-17.9V488c0 17.8 18.8 29.4 34.7 21.5l98.7-49.4c16.3-8.1 26.5-24.8 26.5-42.9V312.8c72.6-46.3 128-108.4 128-211.1.1-25.2.1-50.4-6.8-82.6zM400 160c-26.5 0-48-21.5-48-48s21.5-48 48-48 48 21.5 48 48-21.5 48-48 48z"/></svg>';
                   break;
                 case 'selector':
-                  this.contentFA = '<i class="fa fa-anchor"></i>';
+                  this.contentFA = '<svg class="fas fa-anchor" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><path d="M12.971 352h32.394C67.172 454.735 181.944 512 288 512c106.229 0 220.853-57.38 242.635-160h32.394c10.691 0 16.045-12.926 8.485-20.485l-67.029-67.029c-4.686-4.686-12.284-4.686-16.971 0l-67.029 67.029c-7.56 7.56-2.206 20.485 8.485 20.485h35.146c-20.29 54.317-84.963 86.588-144.117 94.015V256h52c6.627 0 12-5.373 12-12v-40c0-6.627-5.373-12-12-12h-52v-5.47c37.281-13.178 63.995-48.725 64-90.518C384.005 43.772 341.605.738 289.37.01 235.723-.739 192 42.525 192 96c0 41.798 26.716 77.35 64 90.53V192h-52c-6.627 0-12 5.373-12 12v40c0 6.627 5.373 12 12 12h52v190.015c-58.936-7.399-123.82-39.679-144.117-94.015h35.146c10.691 0 16.045-12.926 8.485-20.485l-67.029-67.029c-4.686-4.686-12.284-4.686-16.971 0L4.485 331.515C-3.074 339.074 2.28 352 12.971 352zM288 64c17.645 0 32 14.355 32 32s-14.355 32-32 32-32-14.355-32-32 14.355-32 32-32z"/></svg>';
                   break;
                 case 'bookmark':
-                  this.contentFA = '<i class="fa fa-bookmark"></i>';
+                  this.contentFA = '<svg class="fas fa-bookmark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><path d="M0 512V48C0 21.49 21.49 0 48 0h288c26.51 0 48 21.49 48 48v464L192 400 0 512z"/></svg>';
                   this.signInRequired = true;
                   break;
                 case 'share':
-                  this.contentFA = '<i class="fa fa-bullhorn"></i>';
+                  this.contentFA = '<svg class="fas fa-bullhorn" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><path d="M576 240c0-23.63-12.95-44.04-32-55.12V32.01C544 23.26 537.02 0 512 0c-7.12 0-14.19 2.38-19.98 7.02l-85.03 68.03C364.28 109.19 310.66 128 256 128H64c-35.35 0-64 28.65-64 64v96c0 35.35 28.65 64 64 64h33.7c-1.39 10.48-2.18 21.14-2.18 32 0 39.77 9.26 77.35 25.56 110.94 5.19 10.69 16.52 17.06 28.4 17.06h74.28c26.05 0 41.69-29.84 25.9-50.56-16.4-21.52-26.15-48.36-26.15-77.44 0-11.11 1.62-21.79 4.41-32H256c54.66 0 108.28 18.81 150.98 52.95l85.03 68.03a32.023 32.023 0 0 0 19.98 7.02c24.92 0 32-22.78 32-32V295.13C563.05 284.04 576 263.63 576 240zm-96 141.42l-33.05-26.44C392.95 311.78 325.12 288 256 288v-96c69.12 0 136.95-23.78 190.95-66.98L480 98.58v282.84z"/></svg>';
                   this.signInRequired = true;
                   break;
                 case 'approve':
-                  this.contentFA = '<i class="fa fa-thumbs-up"></i>';
+                  this.contentFA = '<svg class="fas fa-thumbs-up" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M104 224H24c-13.255 0-24 10.745-24 24v240c0 13.255 10.745 24 24 24h80c13.255 0 24-10.745 24-24V248c0-13.255-10.745-24-24-24zM64 472c-13.255 0-24-10.745-24-24s10.745-24 24-24 24 10.745 24 24-10.745 24-24 24zM384 81.452c0 42.416-25.97 66.208-33.277 94.548h101.723c33.397 0 59.397 27.746 59.553 58.098.084 17.938-7.546 37.249-19.439 49.197l-.11.11c9.836 23.337 8.237 56.037-9.308 79.469 8.681 25.895-.069 57.704-16.382 74.757 4.298 17.598 2.244 32.575-6.148 44.632C440.202 511.587 389.616 512 346.839 512l-2.845-.001c-48.287-.017-87.806-17.598-119.56-31.725-15.957-7.099-36.821-15.887-52.651-16.178-6.54-.12-11.783-5.457-11.783-11.998v-213.77c0-3.2 1.282-6.271 3.558-8.521 39.614-39.144 56.648-80.587 89.117-113.111 14.804-14.832 20.188-37.236 25.393-58.902C282.515 39.293 291.817 0 312 0c24 0 72 8 72 81.452z"/></svg>';
                   this.signInRequired = true;
                   break;
                 case 'disapprove':
-                  this.contentFA = '<i class="fa fa-thumbs-down"></i>';
+                  this.contentFA = '<svg class="fas fa-thumbs-down" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M0 56v240c0 13.255 10.745 24 24 24h80c13.255 0 24-10.745 24-24V56c0-13.255-10.745-24-24-24H24C10.745 32 0 42.745 0 56zm40 200c0-13.255 10.745-24 24-24s24 10.745 24 24-10.745 24-24 24-24-10.745-24-24zm272 256c-20.183 0-29.485-39.293-33.931-57.795-5.206-21.666-10.589-44.07-25.393-58.902-32.469-32.524-49.503-73.967-89.117-113.111a11.98 11.98 0 0 1-3.558-8.521V59.901c0-6.541 5.243-11.878 11.783-11.998 15.831-.29 36.694-9.079 52.651-16.178C256.189 17.598 295.709.017 343.995 0h2.844c42.777 0 93.363.413 113.774 29.737 8.392 12.057 10.446 27.034 6.148 44.632 16.312 17.053 25.063 48.863 16.382 74.757 17.544 23.432 19.143 56.132 9.308 79.469l.11.11c11.893 11.949 19.523 31.259 19.439 49.197-.156 30.352-26.157 58.098-59.553 58.098H350.723C358.03 364.34 384 388.132 384 430.548 384 504 336 512 312 512z"/></svg>';
                   this.signInRequired = true;
                   break;
                 case 'specificity':
-                  this.contentFA = '<i class="fa fa-crosshairs"></i>';
+                  this.contentFA = '<svg class="fas fa-crosshairs" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M500 224h-30.364C455.724 130.325 381.675 56.276 288 42.364V12c0-6.627-5.373-12-12-12h-40c-6.627 0-12 5.373-12 12v30.364C130.325 56.276 56.276 130.325 42.364 224H12c-6.627 0-12 5.373-12 12v40c0 6.627 5.373 12 12 12h30.364C56.276 381.675 130.325 455.724 224 469.636V500c0 6.627 5.373 12 12 12h40c6.627 0 12-5.373 12-12v-30.364C381.675 455.724 455.724 381.675 469.636 288H500c6.627 0 12-5.373 12-12v-40c0-6.627-5.373-12-12-12zM288 404.634V364c0-6.627-5.373-12-12-12h-40c-6.627 0-12 5.373-12 12v40.634C165.826 392.232 119.783 346.243 107.366 288H148c6.627 0 12-5.373 12-12v-40c0-6.627-5.373-12-12-12h-40.634C119.768 165.826 165.757 119.783 224 107.366V148c0 6.627 5.373 12 12 12h40c6.627 0 12-5.373 12-12v-40.634C346.174 119.768 392.217 165.757 404.634 224H364c-6.627 0-12 5.373-12 12v40c0 6.627 5.373 12 12 12h40.634C392.232 346.174 346.243 392.217 288 404.634zM288 256c0 17.673-14.327 32-32 32s-32-14.327-32-32c0-17.673 14.327-32 32-32s32 14.327 32 32z"/></svg>';
                   this.signInRequired = true;
                   break;
                 case 'sparkline':
-                  this.contentFA = '<i class="fa fa-line-chart"></i>';
+                  this.contentFA = '<svg class="fas fa-chart-line" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M496 384H64V80c0-8.84-7.16-16-16-16H16C7.16 64 0 71.16 0 80v336c0 17.67 14.33 32 32 32h464c8.84 0 16-7.16 16-16v-32c0-8.84-7.16-16-16-16zM464 96H345.94c-21.38 0-32.09 25.85-16.97 40.97l32.4 32.4L288 242.75l-73.37-73.37c-12.5-12.5-32.76-12.5-45.25 0l-68.69 68.69c-6.25 6.25-6.25 16.38 0 22.63l22.62 22.62c6.25 6.25 16.38 6.25 22.63 0L192 237.25l73.37 73.37c12.5 12.5 32.76 12.5 45.25 0l96-96 32.4 32.4c15.12 15.12 40.97 4.41 40.97-16.97V112c.01-8.84-7.15-16-15.99-16z"/></svg>';
                   break;
               }
               MediumEditor.extensions.form.prototype.init.apply(this, arguments);
@@ -5920,7 +5901,7 @@ WHERE {\n\
                       return _this.execAction('unlink');
                     }
 
-                    if (DO.U.Editor.MediumEditor.options.id == 'social' && (_this.action == 'selector' || _this.action == 'approve')){
+                    if (DO.U.Editor.MediumEditor.options.id == 'social' && _this.action == 'selector'){
                       var opts = {
                         license: 'https://creativecommons.org/licenses/by/4.0/',
                         content: 'Liked'
@@ -5935,8 +5916,8 @@ WHERE {\n\
                   case 'share':
                     _this.base.restoreSelection();
                     var resourceIRI = uri.stripFragmentFromString(document.location.href);
-                    var id = _this.base.getSelectedParentElement().closest('[id]').id;
-                    resourceIRI = (id) ? resourceIRI + '#' + id : resourceIRI;
+                    var node = _this.base.getSelectedParentElement().closest('[id]');
+                    resourceIRI = (node && node.id) ? resourceIRI + '#' + node.id : resourceIRI;
                     _this.window.getSelection().removeAllRanges();
                     _this.base.checkSelection();
                     DO.U.shareResource(null, resourceIRI);
@@ -6077,13 +6058,13 @@ WHERE {\n\
 
               template.push(
                 '<a href="#" class="medium-editor-toolbar-save" title="Save">',
-                this.getEditorOption('buttonLabels') === 'fontawesome' ? '<i class="fa fa-check"></i>' : this.formSaveLabel,
+                this.getEditorOption('buttonLabels') === 'fontawesome' ? '<svg class="fas fa-check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M173.898 439.404l-166.4-166.4c-9.997-9.997-9.997-26.206 0-36.204l36.203-36.204c9.997-9.998 26.207-9.998 36.204 0L192 312.69 432.095 72.596c9.997-9.997 26.207-9.997 36.204 0l36.203 36.204c9.997 9.997 9.997 26.206 0 36.204l-294.4 294.401c-9.998 9.997-26.207 9.997-36.204-.001z"/></svg>' : this.formSaveLabel,
                 '</a>'
               );
 
               template.push(
                 '<a href="#" class="medium-editor-toolbar-close" title="Close">',
-                this.getEditorOption('buttonLabels') === 'fontawesome' ? '<i class="fa fa-times"></i>' : this.formCloseLabel,
+                this.getEditorOption('buttonLabels') === 'fontawesome' ? '<svg class="fas fa-times" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 352 512"><path d="M242.72 256l100.07-100.07c12.28-12.28 12.28-32.19 0-44.48l-22.24-22.24c-12.28-12.28-32.19-12.28-44.48 0L176 189.28 75.93 89.21c-12.28-12.28-32.19-12.28-44.48 0L9.21 111.45c-12.28 12.28-12.28 32.19 0 44.48L109.28 256 9.21 356.07c-12.28 12.28-12.28 32.19 0 44.48l22.24 22.24c12.28 12.28 32.2 12.28 44.48 0L176 322.72l100.07 100.07c12.28 12.28 32.2 12.28 44.48 0l22.24-22.24c12.28-12.28 12.28-32.19 0-44.48L242.72 256z"/></svg>' : this.formCloseLabel,
                 '</a>'
               );
 
@@ -6251,7 +6232,7 @@ WHERE {\n\
 
                   queryURL = uri.getProxyableIRI(queryURL);
 
-                  form.querySelector('.medium-editor-toolbar-save').insertAdjacentHTML('beforebegin', '<div id="' + sparklineGraphId + '"></div><i class="fa fa-circle-o-notch fa-spin fa-fw"></i>');
+                  form.querySelector('.medium-editor-toolbar-save').insertAdjacentHTML('beforebegin', '<div id="' + sparklineGraphId + '"></div><svg class="fas fa-circle-notch fa-spin fa-fw" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M288 39.056v16.659c0 10.804 7.281 20.159 17.686 23.066C383.204 100.434 440 171.518 440 256c0 101.689-82.295 184-184 184-101.689 0-184-82.295-184-184 0-84.47 56.786-155.564 134.312-177.219C216.719 75.874 224 66.517 224 55.712V39.064c0-15.709-14.834-27.153-30.046-23.234C86.603 43.482 7.394 141.206 8.003 257.332c.72 137.052 111.477 246.956 248.531 246.667C393.255 503.711 504 392.788 504 256c0-115.633-79.14-212.779-186.211-240.236C302.678 11.889 288 23.456 288 39.056z"/></svg>');
                   sG = document.getElementById(sparklineGraphId);
 
                   DO.U.getTriplesFromGraph(queryURL)
@@ -6262,7 +6243,7 @@ WHERE {\n\
                     })
                     .then(function(listHTML){
                       sG.innerHTML = listHTML;
-                      form.removeChild(form.querySelector('.fa.fa-circle-o-notch.fa-spin'));
+                      form.removeChild(form.querySelector('.fas.fa-circle-notch.fa-spin'));
                     })
                     .then(function(x){
                       var rC = document.getElementById(resultContainerId);
@@ -6273,7 +6254,7 @@ WHERE {\n\
                         for (var i = 0; i < sparkline.length; i++) {
                           sparkline[i].parentNode.removeChild(sparkline[i]);
                         }
-                        form.querySelector('.medium-editor-toolbar-save').insertAdjacentHTML('beforebegin', '<i class="fa fa-circle-o-notch fa-spin fa-fw"></i>');
+                        form.querySelector('.medium-editor-toolbar-save').insertAdjacentHTML('beforebegin', '<svg class="fas fa-circle-notch fa-spin fa-fw" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M288 39.056v16.659c0 10.804 7.281 20.159 17.686 23.066C383.204 100.434 440 171.518 440 256c0 101.689-82.295 184-184 184-101.689 0-184-82.295-184-184 0-84.47 56.786-155.564 134.312-177.219C216.719 75.874 224 66.517 224 55.712V39.064c0-15.709-14.834-27.153-30.046-23.234C86.603 43.482 7.394 141.206 8.003 257.332c.72 137.052 111.477 246.956 248.531 246.667C393.255 503.711 504 392.788 504 256c0-115.633-79.14-212.779-186.211-240.236C302.678 11.889 288 23.456 288 39.056z"/></svg>');
 
                         var dataset = e.target.value;
                         var title = e.target.querySelector('*[value="' + e.target.value + '"]').textContent.trim();
@@ -6324,7 +6305,7 @@ WHERE {\n\
                               };
                               var sparkline = DO.U.getSparkline(list, options);
                               sG.insertAdjacentHTML('beforeend', '<span class="sparkline">' + sparkline + '</span> <span class="sparkline-info">' + triples.length + ' observations</span>');
-                                form.removeChild(form.querySelector('.fa.fa-circle-o-notch.fa-spin'));
+                                form.removeChild(form.querySelector('.fas.fa-circle-notch.fa-spin'));
                             }
                             else {
                               //This shouldn't happen.
@@ -6627,7 +6608,7 @@ WHERE {\n\
 
                   //External Note
                   case 'article': case 'approve': case 'disapprove': case 'specificity':
-                    if (DO.U.Editor.MediumEditor.options.id === 'review') {
+                    if (_this.action === 'approve' || _this.action === 'disapprove' || _this.action === 'specificity') {
                       motivatedBy = 'oa:assessing';
                       refLabel = DO.U.getReferenceLabel(motivatedBy);
                     }
@@ -6964,13 +6945,13 @@ WHERE {\n\
 
                     if ('profile' in annotation && annotation.profile == 'https://www.w3.org/ns/activitystreams') {
                       notificationData['statements'] = DO.U.createNoteDataHTML(noteData);
-                      note = DO.U.createActivityHTML(notificationData);
+                      note = doc.createActivityHTML(notificationData);
                     }
                     else {
                       note = DO.U.createNoteDataHTML(noteData);
                     }
 
-                    data = DO.U.createHTML('', note);
+                    data = doc.createHTML('', note);
 // console.log(data)
 // console.log(annotation)
 
@@ -7010,14 +6991,31 @@ WHERE {\n\
                 case 'note':
                   var noteData = createNoteData({'id': id})
                   note = DO.U.createNoteDataHTML(noteData);
-                  var nES = selectedParentElement.nextElementSibling;
+                  // var nES = selectedParentElement.nextElementSibling;
                   var asideNote = '\n\
 <aside class="note">\n\
 '+ note + '\n\
 </aside>';
-                  var asideNode = DO.U.fragmentFromString(asideNote);
-                  var parentSection = MediumEditor.util.getClosestTag(selectedParentElement, 'section');
+                  var asideNode = util.fragmentFromString(asideNote);
+                  var parentSection = doc.getClosestSectionNode(selectedParentElement);
                   parentSection.appendChild(asideNode);
+
+                  if(DO.C.User.IRI) {
+                    var idEscape = (id.match(/^\d/)) ? "\\\\" : '';
+                    var noteDelete = document.querySelector('aside.note article#' + idEscape + id + ' button.delete');
+
+                    if (noteDelete) {
+                      noteDelete.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+
+                        var aside = noteDelete.closest('aside.note')
+                        aside.parentNode.removeChild(aside)
+                        var span = document.querySelector('span[resource="#' + refId + '"]')
+                        span.outerHTML = span.querySelector('mark').textContent
+                      });
+                    }
+                  }
 
                   DO.U.positionNote(refId, refLabel, id);
                   break;
@@ -7041,8 +7039,8 @@ WHERE {\n\
 <aside class="note">\n\
 '+ note + '\n\
 </aside>';
-                      var asideNode = DO.U.fragmentFromString(asideNote);
-                      var parentSection = MediumEditor.util.getClosestTag(selectedParentElement, 'section');
+                      var asideNode = util.fragmentFromString(asideNote);
+                      var parentSection = doc.getClosestSectionNode(selectedParentElement);
                       parentSection.appendChild(asideNode);
 
                       DO.U.positionNote(refId, refLabel, id);
@@ -7280,33 +7278,12 @@ WHERE {\n\
         }
       })()
 
-    }, //DO.U.Editor
-
-    init: function() {
-      if(document.body) {
-        DO.U.initUser();
-        DO.U.initCurrentStylesheet();
-        DO.U.setPolyfill();
-        DO.U.setDocRefType();
-        DO.U.showRefs();
-        DO.U.buttonClose();
-        DO.U.highlightItems();
-        DO.U.initDocumentActions();
-        DO.U.getResourceInfo();
-        DO.U.showTextQuoteSelector();
-        DO.U.showDocumentInfo();
-        DO.U.showFragment();
-        DO.U.showRobustLinks();
-        DO.U.setDocumentMode();
-        DO.U.showInboxNotifications();
-        DO.U.initMath();
-      }
-    }
+    } //DO.U.Editor
   } //DO.U
 }; //DO
 
   if (document.addEventListener) {
-    document.addEventListener('DOMContentLoaded', function(){ DO.U.init(); });
+    document.addEventListener('DOMContentLoaded', function(){ DO.C.init(); });
   }
 }
 

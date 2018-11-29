@@ -10,10 +10,16 @@ following principles in mind: freedom of expression, decentralisation,
 interoperability.
 
 It can be used as a:
-* single-page application - open any dokieli article
+* single-page application - open any dokieli embedded article
 * browser extension - import this repository in your Web browser or install Web
 Extension from [Add-ons for Firefox](https://addons.mozilla.org/en-US/firefox/addon/dokieli/)
 or [Chrome Web Store](https://chrome.google.com/webstore/detail/ddmhaonbhodhgkaljpjlglodncddalid)
+
+
+## License
+* Code: [Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0)
+* Content: [Creative Commons Attribution 4.0 Unported](https://creativecommons.org/licenses/by/4.0/)
+
 
 ## Documentation
 * For brave developers and authors: the canonical [documentation](https://dokie.li/docs)
@@ -25,7 +31,7 @@ explains dokieli's principles, architectural and design patterns.
 * In-browser document authoring and formatting, and semantic enrichments (RDFa annotations)
 * Content negotiation is possible for RDFa, Turtle, JSON-LD, RDF/XML.
 * Information is represented and retrieved following the Linked Data design principles
-* Employs [WebID](https://www.w3.org/2005/Incubator/webid/spec/identity/), [WebID+TLS](https://www.w3.org/2005/Incubator/webid/spec/tls/), [Web Access Control](https://www.w3.org/wiki/WebAccessControl)/ACL and personal online datastore where applicable (compliant with [Linked Data Platform](http://www.w3.org/TR/ldp/) and [Solid](https://github.com/solid/solid-spec) servers)
+* Employs [WebID](https://www.w3.org/2005/Incubator/webid/spec/identity/), [WebID-TLS](https://www.w3.org/2005/Incubator/webid/spec/tls/) and [WebID-OIDC](https://github.com/solid/webid-oidc-spec) for authentication, [Web Access Control](https://www.w3.org/wiki/WebAccessControl)/ACL and personal online datastore where applicable (compliant with [Linked Data Platform](http://www.w3.org/TR/ldp/) and [Solid](https://github.com/solid/solid-spec)-like servers)
 * Uses author's information from their online profile (WebID)
 * Creation of new documents from any existing dokieli document - part of *self-replication*
 * Save document and its dependencies to a new location (anywhere on the Web given access) - part of *self-replication*
@@ -85,38 +91,87 @@ the host sends HTML etc. All content is accessible at minimum from a text-browse
 * Local write: Web browser with JavaScript enabled (use export or local storage)
 * Remote write and access control: above plus WebID and personal online storage
 
-These libraries *optional* when dokieli is used as single-page application:
+These libraries are part of the dokieli distribution:
 
 * [SimpleRDF](https://github.com/nicola/simplerdf) (MIT License) used for RDF
-* [Font Awesome](https://github.com/FortAwesome/Font-Awesome) (SIL OFL 1.1 / MIT License)
+* [Font Awesome](https://github.com/FortAwesome/Font-Awesome) (CC BY 4.0 License / MIT License) icons
 * [MediumEditor](https://github.com/yabwe/medium-editor) (MIT License)
 
 
+## How to contribute
+* Use it. Break it. Report it. Fix it! See [issues](https://github.com/linkeddata/dokieli/issues/).
+* Improve documentation (for the website or repository)
+* Publish articles with it.
+* Join the [dokieli chat](https://gitter.im/linkeddata/dokieli) for help and discussion.
+* Encourage the ideas/movement and however else you want to contribute.
+
+
 ## Development
-* See the [dokieli documentation](https://dokie.li/docs). Quick dev:
+* General background in [dokieli documentation](https://dokie.li/docs).
+* See [fork a repo](https://help.github.com/articles/fork-a-repo/) to setup
+your own development repository and stay
+[synchronised](https://help.github.com/articles/syncing-a-fork). Useful later
+to make pull requests. For example, using your fork at `https://github.com
+/YOUR-USERNAME/dokieli` :
+
 ```
-git clone https://github.com/linkeddata/dokieli
+# Clone your work repository, for example:
+git clone git@github.com:YOUR-USERNAME/dokieli
 cd dokieli
+
+# Add the main repository to sync with
+git remote add upstream https://github.com/linkeddata/dokieli
+
+# Make sure to work off your master and synchronised
+git checkout master
+git fetch upstream
+git merge upstream/master
 
 # Install packages
 npm install
 
-# Build stuff eg. scripts/do.js
+# Check out a branch for your changes
+git checkout -b YOUR-WORK-BRANCHNAME
+
+# Make your code updates at src/ , media/ etc.
+
+# Build eg. to create scripts/do.js
 npm run build
 
 # or automatically rebuild when files change
 npm run watch
+
+# or create a minified scripts/do.js
+npm run minify
+
+# Test your changes, if all okay:
+
+# Note: The add/commit lines below can be combined with `commit -am`
+# If including scripts/do.js, make sure that it is the minified version
+
+# Add the changes you've made to staging
+git add PATH/TO/FILE
+
+# Commit staged changes with a useful message
+git commit -m "Add x to do y"
+
+# Push changes to your work repository
+git push
 ```
 
-
-## License
-[Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0)
+Pull requests should be a single commit. It keeps the commit log concise and
+helps a lot towards the review process. There should not be any commits about
+merges or reverts in the commit history. See GitHub's [pull
+requests](https://help.github.com/articles/about-pull-requests/) for the
+remaining steps on how to propose your changes to be brought into dokieli's
+repository.
 
 
 ## Contributors
 * [Amy Guy](https://github.com/rhiaro)
 * [Amy van der Hiel](https://github.com/amyvdh)
 * [Andrei Vlad Sambra](https://github.com/deiu)
+* [Ben Companjen](https://github.com/bencomp)
 * [Benjamin Young](https://github.com/bigbluehat)
 * [Chris Chapman](https://github.com/cdchapman)
 * [Dmitri Zagidulin](https://github.com/dmitrizagidulin)
@@ -129,14 +184,8 @@ npm run watch
 * [OpenLink Software](https://github.com/openlink)
 * [Renato Stauffer](https://github.com/reni99)
 * [Ruben Taelman](https://github.com/rubensworks)
+* [Ruben Verborgh](https://github.com/RubenVerborgh)
 * [Sandro Hawke](https://github.com/sandhawke)
 * [Sarven Capadisli](https://github.com/csarven) (maintainer)
 * [Sergey Malinin](https://github.com/smalinin)
 * [Tim Berners-Lee](https://github.com/timbl)
-
-## How to contribute
-* Use it. Break it. Report it. Fix it! See [issues](https://github.com/linkeddata/dokieli/issues/).
-* Improve documentation (for the website or repository)
-* Publish articles with it.
-* Join the [dokieli chat](https://gitter.im/linkeddata/dokieli) for help and discussion.
-* Encourage the ideas/movement and however else you want to contribute.
